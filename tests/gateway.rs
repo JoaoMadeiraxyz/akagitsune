@@ -90,6 +90,46 @@ async fn binary_frames_pass_through_untouched() {
 }
 
 #[tokio::test]
+async fn fifo_order_holds_across_a_multi_batch_burst() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    let burst = 200;
+    for i in 0..burst {
+        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
+            .await
+            .unwrap();
+    }
+
+    for i in 0..burst {
+        assert_eq!(next_json(&mut b).await["data"], json!({ "seq": i }));
+    }
+}
+
+#[tokio::test]
+async fn slow_consumer_receives_a_warning_frame() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    let overflow = realtime_gateway::state::BROADCAST_CAPACITY * 500;
+    for i in 0..overflow {
+        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
+            .await
+            .unwrap();
+    }
+
+    let warning = loop {
+        let msg = next_json(&mut b).await;
+        if msg["type"] == "warning" {
+            break msg;
+        }
+    };
+    assert!(warning["dropped"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
 async fn invalid_json_is_rejected_without_broadcasting() {
     let url = spawn_server().await;
     let (mut a, _) = connect(&url).await;
