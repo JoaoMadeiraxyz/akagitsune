@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     extract::{
@@ -52,23 +52,35 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
     let (tx_local, mut rx_local) = mpsc::channel::<Message>(LOCAL_QUEUE_SIZE);
     let tx_global = state.tx.clone();
+    let dropped_total = Arc::new(AtomicU64::new(0));
 
     let mut writer_task = tokio::spawn(async move {
-        while let Some(msg) = rx_local.recv().await {
-            if sender.send(msg).await.is_err() {
+        let mut batch = Vec::with_capacity(LOCAL_QUEUE_SIZE);
+        loop {
+            batch.clear();
+            if rx_local.recv_many(&mut batch, LOCAL_QUEUE_SIZE).await == 0 {
                 break;
+            }
+            for msg in batch.drain(..) {
+                if sender.feed(msg).await.is_err() {
+                    return;
+                }
+            }
+            if sender.flush().await.is_err() {
+                return;
             }
         }
     });
 
     let tx_to_local = tx_local.clone();
+    let dropped_total_writer = Arc::clone(&dropped_total);
     let mut global_to_local_task = tokio::spawn(async move {
         loop {
             let msg = match rx_global.recv().await {
                 Ok(broadcast) if broadcast.source_id == my_id => continue,
                 Ok(broadcast) => broadcast.payload,
                 Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                    warn!("{my_id} lagged by {dropped} messages");
+                    dropped_total_writer.fetch_add(dropped, Ordering::Relaxed);
                     to_text(&ServerMessage::Warning { dropped })
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -99,12 +111,11 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 _ => continue,
             };
 
-            match tx_global.send(BroadcastMessage {
+            if let Err(e) = tx_global.send(BroadcastMessage {
                 source_id: my_id,
                 payload,
             }) {
-                Ok(n) => info!("{my_id} broadcast to {n} receivers"),
-                Err(e) => warn!("{my_id} broadcast failed: {e}"),
+                warn!("{my_id} broadcast failed: {e}");
             }
         }
     });
@@ -120,5 +131,6 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
     global_to_local_task.abort();
 
     let connections = state.connections.fetch_sub(1, Ordering::Relaxed) - 1;
-    info!("{my_id} disconnected (total: {connections})");
+    let dropped_total = dropped_total.load(Ordering::Relaxed);
+    info!("{my_id} disconnected (total: {connections}, lagged: {dropped_total})");
 }

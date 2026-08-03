@@ -18,11 +18,11 @@ There is no handshake. A client is a participant the moment it connects.
 The socket is split, and each direction gets its own task, with a bounded mpsc
 queue between them:
 
-| Task       | Job                                                                                                                                            |
-|------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| **reader** | Reads frames from the socket. Text is validated as JSON and wrapped in an envelope; binary is passed through untouched. Publishes to the bus.  |
-| **bridge** | Receives from the bus, skips messages the connection itself published, and forwards to the local queue. Turns `Lagged` into a `warning` frame. |
-| **writer** | Drains the local queue into the socket.                                                                                                        |
+| Task        | Job                                                                                                                                            |
+|-------------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| **reader**  | Reads frames from the socket. Text is validated as JSON and wrapped in an envelope; binary is passed through untouched. Publishes to the bus.  |
+| **bridge**  | Receives from the bus, skips messages the connection itself published, and forwards to the local queue. Turns `Lagged` into a `warning` frame. |
+| **writer**  | Drains the local queue in batches (`recv_many`) and issues one `flush` per batch, instead of one per message.                                  |
 
 Only the writer touches the sink, so no locking is needed around it.
 
@@ -63,6 +63,10 @@ even if tests still pass.
   connection's local queue holds `LOCAL_QUEUE_SIZE`, and frames are capped at
   `MAX_MESSAGE_SIZE`. A slow client degrades into `warning` frames; it never
   grows memory without bound and never blocks a publisher.
+- **No per-message logging in the fanout path.** Publishing and forwarding a
+  message never formats a `Uuid` or any other per-frame data into a log line —
+  that cost scales with fanout. Connect, disconnect, and the accumulated lag
+  count are logged twice per connection lifetime, not per message.
 
 ## Backpressure
 

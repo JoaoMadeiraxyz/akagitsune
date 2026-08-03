@@ -129,3 +129,29 @@ router — it cannot do targeted notification or isolated game sessions. This is
 the largest known limitation and is documented in `docs/architecture.md`.
 Revisit before optimizing anything else about fanout, because topics change the
 shape of that cost entirely.
+
+---
+
+## 9. The writer flushes in batches, not once per message
+
+**Context.** The writer task called `sender.send(msg)` per queued message,
+which is `feed` plus `flush` — one syscall per frame. Under load, `top`
+showed the gateway spending the large majority of its CPU in `sys`, not
+`user`; an A/B run at `--connections 1000 --senders 100 --rate 50 --seconds 8`
+measured `sys` time dropping from roughly 92% of process CPU to roughly 65%
+after batching, with throughput up and the client-visible backpressure
+warnings down by two orders of magnitude.
+
+**Decision.** The writer drains its local queue with
+`rx_local.recv_many(&mut batch, LOCAL_QUEUE_SIZE)` — which waits for at least
+one message, then takes whatever else is already queued without waiting
+further — calls `sender.feed(msg)` for each item in order, and flushes once
+per batch.
+
+**Consequence.** Per-socket delivery order is unchanged: nothing is dropped,
+reordered, or coalesced beyond what `Lagged` already drops upstream at the
+bus. Idle sockets still flush a batch of one, so latency for a lone message is
+unaffected. The same batching also fixed the hot-path logging cost: the
+per-message `info!`/`warn!` calls that formatted a `Uuid` for every fanned-out
+frame were removed, with the lag count folded into the existing
+connect/disconnect log lines instead.
