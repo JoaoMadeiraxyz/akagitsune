@@ -155,3 +155,47 @@ unaffected. The same batching also fixed the hot-path logging cost: the
 per-message `info!`/`warn!` calls that formatted a `Uuid` for every fanned-out
 frame were removed, with the lag count folded into the existing
 connect/disconnect log lines instead.
+
+## 10. The load generator is calibrated against a known answer before it is believed
+
+**Problem.** The first two baselines in `docs/architecture.md` were produced by
+a harness nobody had checked. It counted frames over the whole run, warmup
+included, and divided by the measured window alone, so every throughput figure
+it ever printed was inflated by `seconds / (seconds - warmup)` — 25% at the
+`--seconds 10` used for those runs. It timestamped latency samples *after*
+building a full `serde_json::Value` from each received frame, started its clock
+before the first socket connected, capped samples per connection so the tail of
+a long run went unrecorded, silently fell back to defaults on an unparseable
+flag, and — worst — drove its senders from a `tokio::time::interval` inside the
+same `select!` as the reader. When a send blocked, the generator simply
+published less and said nothing: a run asking for 150,000 frames delivered
+73,126 of them and reported the result as if the requested load had been
+applied.
+
+**Decision.** Publishing follows an absolute schedule (`frame n` is due at
+`start + n / rate`), and each frame carries both its due instant and the instant
+it actually left, so *service* and *response* latency are reported side by side
+and neither coordinated omission nor harness lateness can hide in a single
+number. A frame belongs to the measured window by the timestamp its publisher
+stamped on it rather than by when it arrived, which makes the throughput
+denominator match its numerator exactly and lets in-flight frames drain after
+the window instead of counting as loss. Samples go into a log-linear histogram
+with a bounded relative error under 1% instead of a truncating vector, all
+sockets are opened and acknowledged before the clock starts, and an unknown or
+unparseable argument aborts.
+
+None of that is self-evidently correct either, so `scripts/calibrate.sh`
+measures the harness against `examples/refserver.rs` — a reference server that
+speaks the same wire protocol with a delay, a loss rate and a freeze chosen on
+purpose. Every metric there has an answer known by arithmetic: 2,500 frames
+published, 497,500 delivered, 49,750 msg/s, 100% delivery, 90% under 1-in-10
+loss, service p50 of 50 ms under an injected 50 ms. `scripts/bench.sh` runs the
+calibration first and refuses to produce baselines if it fails.
+
+**Consequence.** The gateway's numbers moved, and the old ones were wrong: the
+`--connections 200 --senders 5 --rate 50` baseline was published as 62k msg/s
+and is actually 49,750 msg/s, which is also exactly
+`senders x rate x (connections - 1)` — the clean rows measure latency and cost
+at a known offered load, not capacity. The harness also reports its own CPU
+next to the gateway's, which is how the cliff row is now visibly harness-bound
+rather than quietly presented as the gateway's ceiling.

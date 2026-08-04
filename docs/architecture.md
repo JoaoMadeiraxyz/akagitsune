@@ -108,28 +108,157 @@ structural properties of the design, not benchmark results.
   the cost of some clarity. Do not do this without a measurement showing task
   overhead matters.
 
+## Performance goal
+
+The project target is a single process sustaining:
+
+| Metric | Target |
+|--------|--------|
+| Throughput | ≥ **1 000 000** deliveries per second |
+| service p99 | **10–20 ms** (passes at ≤ 20 ms; lower is better) |
+| Delivery | ≥ **99.9%** |
+| Warnings | **0** on a clean run |
+
+A *delivery* is one framed message received by one subscriber — the same unit
+`loadgen` reports as throughput. On a clean run that equals
+`senders × rate × (connections − 1)`.
+
+The goal is **sustained offered load within SLO**, not the peak number printed
+while consumers are lagging. A cliff row that shows multi-million msg/s with
+delivery well below 99.9% does not count. The latency bar is **service p99**
+(arrival minus the instant the frame left the publisher), not response p99.
+
+### Status
+
+**Not yet met.** Best clean baseline on the machine below is about 490 000 msg/s
+(`ingest-50`) at service p99 ≈ 2.6 ms and 100% delivery. Fanout at 1000
+connections sustains ~250 000 msg/s inside the latency band. Closing the gap to
+1 000 000 msg/s without leaving the SLO is the work ahead.
+
+### Goal and stretch scenarios
+
+`scripts/bench.sh --goal` runs only these. Offered load is exact arithmetic.
+Default `scripts/bench.sh` keeps the cheaper baseline sweep.
+`scripts/bench.sh --all` runs the baseline sweep followed by these goal and
+stretch scenarios, and prints the same pass/miss verdict.
+
+| Scenario | Shape | Invocation | Offered |
+|----------|-------|------------|---------|
+| `goal-1m-fanout` | few publishers, many receivers | `--connections 501 --senders 10 --rate 200` | 1 000 000 msg/s |
+| `goal-1m-ingest` | many publishers, few receivers | `--connections 101 --senders 50 --rate 200` | 1 000 000 msg/s |
+| `goal-1m-mesh` | many publishers and receivers | `--connections 201 --senders 50 --rate 100` | 1 000 000 msg/s |
+| `beyond-1.5m-fanout` | fanout stretch | `--connections 501 --senders 15 --rate 200` | 1 500 000 msg/s |
+| `beyond-1.5m-ingest` | ingest stretch | `--connections 101 --senders 50 --rate 300` | 1 500 000 msg/s |
+| `beyond-1.5m-mesh` | mesh stretch | `--connections 251 --senders 50 --rate 120` | 1 500 000 msg/s |
+| `beyond-2m-fanout` | fanout stretch | `--connections 1001 --senders 10 --rate 200` | 2 000 000 msg/s |
+| `beyond-2m-mesh` | mesh stretch | `--connections 201 --senders 50 --rate 200` | 2 000 000 msg/s |
+| `beyond-3m-explore` | aggressive explore | `--connections 301 --senders 50 --rate 200` | 3 000 000 msg/s |
+
+The 1M goal is **hit** when at least one `goal-1m-*` row sustains its offered
+load with delivery ≥ 99.9%, service p99 ≤ 20 ms, zero warnings, and the
+generator holding the requested publish rate. Stretch rows use the same SLO at
+higher offered load; they measure how far past 1M the process still holds, they
+are not required to pass for the goal to count.
+
+On a same-machine run the load generator can saturate first (see the cliff row
+below). A `harness-bound` verdict means the measurement described the harness,
+not the gateway ceiling — do not quote it as either a hit or a gateway failure.
+
+Goal/stretch result rows belong in a separate table here once
+`scripts/bench.sh --goal` has been run on a calibrated harness. Do not invent
+them.
+
 ## Measured baselines
 
 Record results here when `perf-check` produces them, with the hardware, the
 build profile, and the exact `loadgen` invocation — a number without its
-conditions is not a baseline.
+conditions is not a baseline. `scripts/bench.sh` prints the table in this shape
+and refuses to run if `scripts/calibrate.sh` fails first. Goal and stretch
+numbers come from `scripts/bench.sh --goal`.
 
 All runs below: Apple M4 Pro, 14 cores, `--release`, gateway and load generator
-on the same machine.
+on the same machine, commit `334cf1d` plus the harness rewrite.
 
-| Date       | Commit           | Invocation                                               | Throughput  | p50      | p99      | Warnings   |
-|------------|------------------|----------------------------------------------------------|-------------|----------|----------|------------|
-| 2026-08-01 | `166f68b` + docs | `--connections 200 --senders 5 --rate 50 --seconds 10`   | 62k msg/s   | 3.27 ms  | 5.40 ms  | 0          |
-| 2026-08-01 | `166f68b` + docs | `--connections 300 --senders 30 --rate 400 --seconds 10` | 1.40M msg/s | 36.85 ms | 87.37 ms | 391,873    |
+| Date       | Scenario      | Invocation                                                                 | Throughput   | service p50 | service p99 | response p99 | Delivery | Warnings | Gateway CPU | Loadgen CPU | Peak RSS |
+|------------|---------------|----------------------------------------------------------------------------|--------------|-------------|-------------|--------------|----------|----------|-------------|-------------|----------|
+| 2026-08-03 | fanout-200    | `--connections 200 --senders 5 --rate 50 --seconds 15`                     | 49,750 msg/s | 1.55 ms     | 4.94 ms     | 7.06 ms      | 100.00%  | 0        | 37%         | 39%         | 31.7 MiB |
+| 2026-08-03 | fanout-500    | `--connections 500 --senders 5 --rate 50 --seconds 15`                     | 124,750 msg/s| 2.22 ms     | 7.57 ms     | 9.70 ms      | 100.00%  | 0        | 84%         | 90%         | 73.0 MiB |
+| 2026-08-03 | fanout-1000   | `--connections 1000 --senders 5 --rate 50 --seconds 15`                    | 249,750 msg/s| 3.48 ms     | 8.18 ms     | 10.21 ms     | 100.00%  | 0        | 136%        | 144%        | 141.5 MiB|
+| 2026-08-03 | ingest-50     | `--connections 50 --senders 50 --rate 200 --seconds 15`                    | 490,000 msg/s| 1.20 ms     | 2.58 ms     | 4.02 ms      | 100.00%  | 0        | 142%        | 292%        | 11.2 MiB |
+| 2026-08-03 | payload-4k    | `--connections 200 --senders 5 --rate 50 --payload-bytes 4096 --seconds 15`| 49,750 msg/s | 1.84 ms     | 5.94 ms     | 8.14 ms      | 100.00%  | 0        | 52%         | 48%         | 37.6 MiB |
+| 2026-08-03 | cliff-300     | `--connections 300 --senders 30 --rate 400 --seconds 15`                   | 2.69M msg/s  | 131.58 ms   | 579.58 ms   | 5423.10 ms   | 75.10%   | 498      | 332%        | 1068%       | 46.4 MiB |
 
-The first run is the clean baseline: 495,510 deliveries received against 495,510
-expected — complete fanout, nothing dropped. Idle server RSS was 31.5 MiB with
-200 connections open.
+### How to read these
 
-The second run is past the cliff and is **not** a valid throughput figure. Only
-11.2M of 35.7M expected deliveries arrived; the rest were dropped as consumers
-fell behind. It is recorded because the shape of the failure is the useful part:
-throughput and latency both look like numbers, and only the warning count
-reveals that a third of the traffic never made it. Note also that the load
-generator shares the machine, so some of that backpressure is self-inflicted —
-see `perf-check` on isolating the harness before drawing conclusions.
+**The clean rows measure latency and cost, not capacity.** In every row above
+the cliff, throughput equals `senders x rate x (connections - 1)` to the frame —
+49,750, 124,750, 249,750, 490,000 — because the gateway delivered everything
+that was offered. They are a statement that the gateway sustained that load at
+that latency with complete delivery, not that it could not do more.
+
+**Per-connection cost is roughly 145 KiB of RSS**, stable from 200 to 1000
+connections (146.4, 143.2, 141.7 KiB/conn), and each of the three tasks per
+connection is cheap enough that 1000 idle-ish sockets cost 141 MiB total.
+
+**Fanout latency grows slowly with connection count.** Going from 200 to 1000
+connections — five times the deliveries per published frame — moved service p50
+from 1.55 ms to 3.48 ms and p99 from 4.94 ms to 8.18 ms.
+
+**Padding 4 KiB onto every payload cost 0.3 ms at p50** and 41 MiB more RSS at
+the same message rate, which is the refcounted-clone invariant doing its job:
+the payload is cloned per subscriber as a refcount, not as bytes.
+
+**The cliff row is not a throughput figure.** Only 75.1% of the expected
+deliveries arrived; the rest were dropped for consumers that fell more than
+`BROADCAST_CAPACITY` behind. It is recorded because the shape of the failure is
+the useful part: throughput and latency both still look like numbers, and only
+delivery and the warning count reveal that a quarter of the traffic never made
+it.
+
+**The cliff row is also harness-bound.** The load generator burned 1068% CPU
+against the gateway's 332% on a 14-core machine — the harness was consuming
+three times the CPU of the thing it was measuring, so part of that backpressure
+is self-inflicted. This is exactly why `bench.sh` records both CPU columns. Do
+not quote the cliff as the gateway's ceiling; it is the ceiling of this machine
+running both sides at once.
+
+### Two latencies, and why both are reported
+
+`loadgen` publishes on an absolute schedule: frame `n` is due at
+`start + n / rate`. Each frame carries both the instant it was **due** and the
+instant it **actually left**.
+
+- **service latency** = arrival − actual send. What the gateway did, with the
+  generator's own lateness removed.
+- **response latency** = arrival − scheduled send. Includes any delay in
+  getting the frame out, so a publisher stalled by backpressure shows up here
+  instead of vanishing.
+
+Reporting only service latency hides coordinated omission — a harness that
+stalls simply sends less and reports the same good number. Reporting only
+response latency charges the gateway for the harness's timer, which on this
+machine wakes about 1.5-2.5 ms late under load. The gap between the two columns
+is the harness's own contribution, and `slip_mean_ms` in the CSV names it
+directly.
+
+### Harness calibration
+
+None of the numbers above were recorded until `scripts/calibrate.sh` passed.
+It measures `loadgen` against `examples/refserver.rs`, a reference server whose
+behaviour is fixed on purpose so the correct answer is known by arithmetic
+rather than by expectation:
+
+| Predicted | Measured |
+|---|---|
+| 2,500 frames published (5 x 50 x 10 s) | 2,500 |
+| 497,500 deliveries (2,500 x 199) | 497,500 |
+| 49,750 msg/s throughput | 49,750.0 |
+| 100% delivery | 100.0000% |
+| Server's own delivery counter, 597,000 | 597,000 |
+| 50 ms injected delay → service p50 50 ms | 51.58 ms |
+| 1-in-10 injected loss → delivery 90% | 90.0000% |
+| 500 ms freeze → response max ≥ 497 ms | 499.09 ms |
+
+The 1.58 ms above the injected 50 ms is the measurement floor of this setup:
+one loopback hop plus the millisecond granularity of the timer on each side.
+Treat any service-latency figure below about 1.5 ms as at the noise floor.

@@ -6,6 +6,11 @@ gateway does not interpret message content: what a payload means is decided by
 whoever uses the gateway, whether that is chat, notifications, game state, or
 anything else.
 
+**Performance goal:** sustain **1 000 000 deliveries/s** at **service p99
+10–20 ms** with **≥ 99.9% delivery**. See
+[`docs/architecture.md`](docs/architecture.md#performance-goal) for the bar,
+current gap, and goal/stretch scenarios.
+
 ## Scope
 
 > A feature belongs in this gateway only if it can be implemented **without
@@ -95,6 +100,9 @@ Frames larger than 64 KiB are rejected at the WebSocket layer.
 | `src/main.rs`         | Config, logging and shutdown        |
 | `tests/gateway.rs`    | End-to-end integration tests        |
 | `examples/loadgen.rs` | Load generator                      |
+| `examples/refserver.rs`| Reference server for calibration   |
+| `scripts/bench.sh`    | Benchmark sweep                     |
+| `scripts/calibrate.sh`| Harness self-check                  |
 
 Each connection runs three tasks: one reading from the socket, one bridging the
 bus, one writing to the socket. The first to finish tears down the others. The
@@ -119,9 +127,16 @@ cargo test
 Measuring performance:
 
 ```bash
-cargo run --release &
-cargo run --release --example loadgen -- --connections 200 --senders 5 --rate 50 --seconds 10
+scripts/bench.sh --quick     # calibrate the harness, then one fanout run
+scripts/bench.sh             # baseline sweep, writes bench-results/<timestamp>.csv
+scripts/bench.sh --goal      # 1M goal + stretch scenarios and a pass/miss verdict
+scripts/bench.sh --all       # baseline + goal + stretch, with verdict
+scripts/calibrate.sh         # harness self-check against a known answer
 ```
+
+`bench.sh` refuses to produce numbers if the calibration fails. See
+`docs/architecture.md` for the performance goal, current baselines, and how to
+read them.
 
 ## Not implemented yet
 

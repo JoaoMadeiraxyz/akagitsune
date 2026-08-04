@@ -5,6 +5,9 @@ messages between sockets. Nothing else. The gateway never learns what a message
 means — the purpose is defined entirely by whoever uses it: chat, notifications,
 multiplayer game state, telemetry, anything.
 
+**Performance goal:** 1M deliveries/s, service p99 10–20 ms, ≥ 99.9% delivery.
+Measure with `scripts/bench.sh --goal`. Details in `docs/architecture.md`.
+
 ## The scope test
 
 > A feature belongs in this gateway only if it can be implemented **without
@@ -40,6 +43,9 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run --release --example loadgen -- --help
+scripts/bench.sh --quick
+scripts/bench.sh --goal
+scripts/bench.sh --all
 ```
 
 ## Layout

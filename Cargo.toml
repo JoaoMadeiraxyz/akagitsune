@@ -15,3 +15,12 @@ serde_json = { version = "1", features = ["raw_value"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.30"
+
+[[example]]
+name = "loadgen"
+path = "examples/loadgen.rs"
+test = true
+
+[[example]]
+name = "refserver"
+path = "examples/refserver.rs"
