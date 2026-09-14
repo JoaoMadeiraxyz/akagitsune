@@ -1,4 +1,4 @@
-# realtime-gateway
+# Akagitsune
 
 A generic realtime WebSocket gateway in Rust, built on axum and tokio. It
 manages connections and relays messages between sockets — nothing else. The
