@@ -87,7 +87,7 @@ see [`docs/decisions.md`](docs/decisions.md).
 
 ### Limits
 
-Frames larger than 64 KiB are rejected at the WebSocket layer.
+Frames larger than 64 KiB are rejected at the WebSocket layer: the sender's connection is dropped without a close frame, and nothing is relayed.
 
 ## Layout
 
