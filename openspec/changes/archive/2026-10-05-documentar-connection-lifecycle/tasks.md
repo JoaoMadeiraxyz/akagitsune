@@ -7,5 +7,5 @@
 
 ## 2. Verify
 
-- [x] 2.1 Run `openspec validate --strict` and the fleet gate `valida-change.mjs` locally before archiving (author, before opening the PR)
+- [x] 2.1 Run `openspec validate --strict` locally before archiving (author, before opening the PR)
 - [x] 2.2 Run `cargo test` locally to confirm the cited tests pass on `main` (author); CI runs fmt, clippy and `cargo test` on the PR, but `main` has no branch protection, so the reviewer confirms the run is green before merging
