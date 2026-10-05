@@ -22,7 +22,7 @@ None of that changes. What changes is everything that assumed one global bus. To
 **Non-Goals:**
 
 - Changing the gateway, its tests or its specs.
-- Overlapping subscriptions (one connection in several topics) and publish-only connections. Those are fan-in shapes for a later scenario. This change covers one topic per connection.
+- General overlapping-subscription topologies (arbitrary topic sets per connection) and general fan-in shapes. This change covers one home topic per connection plus the single extra quiet topic described under *Extra topic*, which is enough to measure the shared-inbox effect.
 - Running benchmarks in CI.
 
 ## Decisions
@@ -63,6 +63,11 @@ With topics, a run can be wrong in ways the old meters cannot see: a frame deliv
     - Connections that closed early (`closed_early`) are left out of it, together with their expected and received counts, and are reported separately.
     - `unaccounted_scope` says how many connections it covers.
   - `subscribe_ack_p50_ms` and `subscribe_ack_p99_ms`: the setup cost of joining topics, which for the gateway is the registry's copy-on-write, measured outside the clock.
+- **Extra topic.** With `--extra-topic-rate R` (`topics` only), every measured connection also subscribes to `t-extra`, and one dedicated extra connection publishes to it at `R` frames/s without subscribing to anything.
+  - **What it measures:** `roteia-por-topico` gives each connection one inbox for all its topics (design decision 4). Under lag, the busy home topic can push the quiet topic's frames out, and `warning` cannot say which topic lost them. This flag measures that instead of describing it.
+  - **Separate meters:** `t-extra` frames are counted apart from the home topics: `extra_sent`, `extra_expected` (`extra_sent × connections`, since the publisher is not a member), `extra_received` and `extra_delivery_pct`. They are not part of `offered()`, throughput or the main delivery %.
+  - **`unaccounted`** covers both, because the gateway's `dropped` total cannot be split by topic: expected (home + extra) − received (home + extra) − dropped.
+  - **Side effect:** the extra publisher is also the harness's first publish-only connection, so it exercises publishing without a subscription.
 - **Churn.** `--churn N --churn-rate R` opens `N` extra connections that, during the measured window, alternately subscribe to and unsubscribe from topic `t-0`, each at `R` operations per second (default 1). The steady members' delivery and latency show what membership churn costs a publish (the copy-on-write risk in `roteia-por-topico` design decision 2). Churn connections are separate from the measured topology:
   - they are not part of `--connections`, so they are not in `offered()` or in the expected deliveries, and their receptions are ignored;
   - they are not in `subscribe_failed`, which covers only the setup subscriptions before the clock;
@@ -94,6 +99,7 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
 | 10 churn exclusion | case 5 with `--churn 20 --churn-rate 5` | steady members' delivery 100%, `unaccounted` 0 and `churn_failed` 0, so churners are excluded correctly |
 | 11 undrained run | 20 connections, 1 sender at 20/s, 10 s measured, against `--delay-ms 2000`, with `--drain-max-ms 500` | `drained` false, `unaccounted` and `churn_failed` `null`, never a positive number, so an incomplete drain cannot read as `incorrect` |
 | 12 drained run | case 11 with the default drain limit | `drained` true, `drain_seconds` ≥ 2, delivery 100%, `unaccounted` 0 |
+| 13 extra topic | case 5 with `--extra-topic-rate 10` | home counts unchanged (5,000 published, 95,000 delivered). `extra_sent` 100 (10/s × 10 s), `extra_expected` 20,000 (100 × 200), `extra_delivery_pct` 100%, `unaccounted` 0 |
 
 **`bench.sh`**
 
@@ -105,10 +111,12 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
   | `topics-1k` | `--connections 1000 --topics 100 --senders 100 --rate 100` | 90 000 deliveries/s | Topic routing at moderate size. |
   | `topics-5k` | `--connections 5000 --topics 500 --senders 500 --rate 100` | 450 000 deliveries/s | Same topic size, five times the connections: latency should stay flat if fanout is bounded by topic size. |
   | `binary-200` | `fanout-200` with `--binary` | same as `fanout-200` | Binary relay cost. Under `topics`, that includes building the header once per publish. |
+  | `overlap-200` | `fanout-200` with `--extra-topic-rate 5` | 49 750 home deliveries/s plus 1 000 extra (5 × 200) | Clean baseline for a connection in two topics: extra delivery should be 100%. |
+  | `overlap-cliff` | `cliff-300` with `--extra-topic-rate 5` | 3 588 000 home deliveries/s plus 1 500 extra (5 × 300) | The shared-inbox effect under overload: how much of the quiet topic is lost when the busy one lags. A cliff record, not a pass. |
   | `churn-500` | `fanout-500` with `--churn 200 --churn-rate 50` | same as `fanout-500` | Membership churn under load: 10 000 subscribe/unsubscribe operations per second on a 500-member topic. Each one copies a slice of about 500 handles of roughly 24 bytes, about 12 KB, so on the order of 120 MB/s of copy-on-write, which is enough to show in latency if the design's trade is wrong. A rate of 1 op/s per churner would barely touch the copy-on-write and would prove nothing. Both figures are estimates, not measurements. |
   | `goal-1m-topics` (goal set) | `--connections 2100 --topics 100 --senders 100 --rate 500` | exactly 1 000 000 deliveries/s across 100 topics of 21 | The goal delivery rate with fanout bounded by topic size. This is the row that shows whether topic routing pays off. |
 
-- **CSV:** gains `protocol`, `topics`, `binary`, `churn`, `churn_rate`, `subscribe_failed`, `subscribe_ack_p99_ms`, `churn_failed`, `misrouted`, `dropped`, `unaccounted`, `unaccounted_scope`, `drained` and `drain_seconds`. The markdown table prints the full invocation.
+- **CSV:** gains `protocol`, `topics`, `binary`, `churn`, `churn_rate`, `extra_topic_rate`, `extra_expected`, `extra_received`, `extra_delivery_pct`, `subscribe_failed`, `subscribe_ack_p99_ms`, `churn_failed`, `misrouted`, `dropped`, `unaccounted`, `unaccounted_scope`, `drained` and `drain_seconds`. The markdown table prints the full invocation.
 - **Verdict.** `offered()` becomes `senders × rate × (conns / topics − 1)`, where `conns` is `--connections` without churners. A new verdict, `incorrect`, applies when any of these holds, and it overrides every other verdict, because a fast run that routes wrongly is not a performance result:
   - `misrouted > 0`;
   - `subscribe_failed > 0`;
@@ -137,7 +145,7 @@ Under `topics`, the publisher never sends to its own inbox (`roteia-por-topico` 
 
 The `perf-check` skill already states that a change to `loadgen` or `refserver` invalidates every baseline taken with the old one. So this change:
 
-1. passes `scripts/calibrate.sh` (cases 1–12);
+1. passes `scripts/calibrate.sh` (cases 1–13);
 2. runs `scripts/bench.sh --all --protocol legacy` against the current gateway on `main`;
 3. replaces the 2026-08-03 rows in *Measured baselines* with the new rows, with hardware, profile, commit and invocation. The 2026-08-03 rows move to a subsection titled as measured with the previous harness;
 4. rewrites *Status* from the new rows.
