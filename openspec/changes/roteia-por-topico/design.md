@@ -98,7 +98,13 @@ The `papaya` API was checked by compiling against 0.2.5:
 - For each subscriber other than itself, it sends a refcount clone with `inbox.send(frame)`. The call never waits: if the inbox is full, it overwrites the oldest pending frame.
 - The cost of a publish is O(subscribers of the topic) inside the publisher's task. Today that cost is spread over N bridge tasks. Removing the bridge also removes one task and one wakeup per delivery.
 
-Back-of-envelope cost: a topic with 10 000 subscribers is about 10 000 `inbox.send` calls in one task. Each one takes that inbox's tail mutex and slot lock, which are uncontended unless several publishers hit the same receiver at once. At roughly 100–200 ns each, the last subscriber's frame leaves 1–2 ms after the first. These are expected costs, not measurements. The bench run in the tasks measures them. If one hot topic makes this matter, a later change can split fanout across tasks.
+Measured cost of the call itself: a topic with 10 000 subscribers is 10 000 `inbox.send` calls in one task. Each call takes that inbox's tail mutex and slot lock, which are uncontended unless several publishers hit the same receiver at once.
+
+- **Conditions:** Apple M4 Pro, `--release`, tokio 1.53.1 and axum 0.8.9 as in `Cargo.lock`, one thread, 10 000 `broadcast(256)` inboxes, 600 rounds.
+- **Result:** one `send` of a refcounted `Message` costs about 60 ns at p50 and 170–220 ns at p99, both while the ring fills and once it overwrites. One publish to 10 000 subscribers takes about 0.6 ms at p50.
+- **What this does not include:** waking a writer that is parked in `recv`, cross-core cache traffic, and contention. It is a lower bound, not the end-to-end fanout latency.
+
+The benchmark rows measure the real figure. If one hot topic makes it matter, a later change can split fanout across tasks.
 
 ### 4. Backpressure: drop the oldest for the slow receiver, warn exactly at the gap
 
@@ -127,7 +133,13 @@ Back-of-envelope cost: a topic with 10 000 subscribers is about 10 000 `inbox.se
 
 **Control replies are never dropped.** `subscribed`, `unsubscribed` and `error` frames go through a separate `mpsc` of `CONTROL_QUEUE_CAPACITY = 16` from the connection's own reader, with `send().await`. The reader produces at most one reply per inbound frame. A connection that floods control frames without reading its socket fills those 16 slots and then stalls only its own reader. If they shared the inbox, a lagging connection could lose its own acknowledgement. The writer serves the control channel first (`biased` select). The visibility guarantee only needs the registry insert to happen before `subscribed` is sent (decision 7), so the two channels need no ordering between them.
 
-**Memory.** A 256-slot ring is allocated per connection up front, at an estimated ~20 KB. That replaces today's bus receiver and 32-slot `mpsc`. The figure is an estimate. The per-connection RSS from the benchmark run is the measurement.
+**Memory**, measured with a counting allocator under the same versions:
+
+- an empty `broadcast::<Message>(256)` allocates **20 632 bytes**, all up front;
+- the 16-slot control `mpsc` allocates **2 208 bytes**, the same as today's 32-slot `mpsc`, because tokio allocates `mpsc` blocks of 32 slots;
+- a `Subscriber` handle is **24 bytes** and an axum `Message` is 48 bytes.
+
+Net effect: about **+20 KB of fixed memory per connection** compared with today. That is roughly 14% on top of the 145 KiB per connection in `docs/architecture.md`, a figure measured with the old harness. The per-connection RSS from the new benchmark run is the number to record.
 
 ### 5. Inbound protocol: the gateway parses its own frame, never `data`
 
@@ -262,20 +274,67 @@ A topic has no existence of its own. It is the set of connections subscribed to 
 - **Retention.** Nothing is kept for late subscribers. That would be the replay buffer, a borderline case in `docs/scope.md`.
 - **Publish feedback.** A publisher does not learn how many connections received a frame, or whether the topic existed.
 
-**Market comparison.** This lifecycle is the norm for ephemeral real-time pub/sub. In Redis Pub/Sub, NATS core subjects, MQTT brokers, Socket.IO rooms, Phoenix channels, Pusher, Ably and Centrifugo, a topic exists through use and disappears when unused. Explicit creation belongs to brokers whose topics hold durable state (Kafka, Google Pub/Sub, SNS, RabbitMQ exchanges and queues), and this gateway holds none.
+**Market comparison.** Implicit lifecycles like this are the norm for ephemeral real-time pub/sub:
 
-This comparison is from the author's knowledge of those systems and was not re-verified against their current documentation for this proposal.
+- **Redis Pub/Sub:** a channel is described only by its subscribers ("an active channel is a Pub/Sub channel with one or more subscribers"), and there is no create or delete command.
+- **NATS core:** subjects need no declaration ("creating new subjects has virtually no overhead"), and a message nobody is subscribed to is not stored.
+- **MQTT:** the spec allows either: a topic "MAY be either predefined in the Server by an administrator or it MAY be dynamically created by the Server when it receives the first subscription or an Application Message". Mosquitto creates topics on use.
+- **Socket.IO:** the in-memory adapter creates a room on the first join and deletes it when the last socket leaves, emitting `create-room` and `delete-room`. This is in the adapter source; the rooms page lists the events but not when they fire.
+- **Phoenix:** a topic is just an identifier, and joining is authorized by `join/3`.
+- **Pusher:** channels are "instantiated on client demand", and become occupied and vacated as subscribers come and go.
+- **Ably:** channels "are created on demand when clients attach", and close some time after the last client detaches.
+- **Centrifugo:** "Channels are automatically created by Centrifugo as soon as the first client subscribes. Similarly, when the last subscriber leaves, the channel is automatically cleaned up."
+
+Brokers whose topics hold durable state treat a topic as a resource with its own lifetime instead:
+
+- **Google Pub/Sub and SNS** create topics explicitly (`CreateTopic` in SNS is idempotent).
+- **RabbitMQ** has exchanges and queues declared by clients. Declaring an existing queue with the same attributes has no effect. An `auto-delete` queue is removed when its last consumer goes, but only if it ever had one.
+- **Kafka** auto-creates a topic on first use by default (`auto.create.topics.enable`, default `true`), but keeps it and its log until it is explicitly deleted.
+
+None of these brokers removes a topic just because nobody is listening, and this gateway, which holds no durable state, has nothing that would need that.
+
+Every statement above was checked against each project's official documentation or source on 2026-10-05:
+- [redis.io pubsub-channels](https://redis.io/docs/latest/commands/pubsub-channels/)
+- [docs.nats.io subjects](https://docs.nats.io/nats-concepts/subjects)
+- [MQTT 5.0 spec](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html)
+- [socket.io-adapter in-memory-adapter.ts](https://github.com/socketio/socket.io/blob/main/packages/socket.io-adapter/lib/in-memory-adapter.ts)
+- [Phoenix.Channel](https://phoenix.hexdocs.pm/Phoenix.Channel.html)
+- [Pusher channels](https://pusher.com/docs/channels/using_channels/channels/)
+- [Ably channel states](https://ably.com/docs/channels/states)
+- [Centrifugo channels](https://centrifugal.dev/docs/server/channels)
+- [SNS CreateTopic](https://docs.aws.amazon.com/sns/latest/api/API_CreateTopic.html)
+- [RabbitMQ queues](https://www.rabbitmq.com/docs/queues)
+- [Kafka broker configs](https://kafka.apache.org/41/configuration/broker-configs/)
 
 Where this design differs, and why:
 
-- **Access control.** Almost every real-time product gates subscriptions: MQTT ACLs, NATS subject permissions, Phoenix `join/3`, Pusher `private-` channels. In Socket.IO only the server can place a connection in a room. This change leaves it out because the gateway has no authentication to build on. It is the expected next step after topics, and `subscribe` is the single choke point where it goes (*Extension points*).
-- **Publish feedback.** Redis `PUBLISH` returns the receiver count; NATS and MQTT return nothing. This design follows NATS and MQTT, because a count would need a reply frame per publish, which doubles a heavy publisher's control traffic.
+- **Access control.** Almost every real-time product gates subscriptions:
+  - Mosquitto ACLs (`topic [read|write|readwrite|deny]`);
+  - NATS permissions ("a grant to publish to, or subscribe to, a set of subjects");
+  - Phoenix `join/3`;
+  - Pusher `private-` and `presence-` channels, which need a server-signed authorization token;
+  - Ably capabilities;
+  - Centrifugo namespace options.
+
+  In Socket.IO, `join` exists only on the server-side socket, so the client cannot place itself in a room. This change leaves it out because the gateway has no authentication to build on. It is the expected next step after topics, and `subscribe` is the single choke point where it goes (*Extension points*).
+- **Publish feedback.** Redis `PUBLISH` returns "the number of clients that the message was sent to". In a Redis Cluster it counts only clients on the publisher's node. No other system here returns a count:
+  - **NATS core:** a plain publish has "no acknowledgment". Only request/reply gets a "no responders" 503 when a subject has zero subscribers.
+  - **MQTT 5.0:** QoS 0 gets no response at all. At QoS 1/2 the server MAY answer reason code 0x10, "No matching subscribers", instead of success. That is optional and a yes/no signal, not a count.
+
+  This design returns nothing, like a NATS core publish or MQTT QoS 0, because any answer means a reply frame per publish, which doubles a heavy publisher's control traffic. A yes/no "no subscribers" signal like MQTT's 0x10 would be the cheapest addition if a consumer ever needs one. It is not part of this change. Sources: [redis.io PUBLISH](https://redis.io/docs/latest/commands/publish/), [NATS core](https://docs.nats.io/nats-concepts/core-nats), [NATS request-reply](https://docs.nats.io/learn/core-nats/request-reply), [MQTT 5.0 §3.4.2.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html).
 - **Wildcards.** NATS, MQTT and Redis `PSUBSCRIBE` offer them. They are left out because they turn the exact-key lookup on every publish into pattern matching, and `docs/scope.md` lists predicate subscriptions as borderline.
-- **Key length.** MQTT allows up to 65,535 bytes and Pusher 164 characters for a channel name. The 255-byte limit here comes from the one-byte length in the binary header (decision 6).
-- **Publishing without a subscription.** This design follows the broker model: publishing and subscribing are independent. Redis `PUBLISH`, NATS, MQTT and Ably let a client publish to a topic it does not subscribe to, and Kafka and Google Pub/Sub keep producers and consumers as separate roles. Room-style products tie them together instead:
-  - in Phoenix, a client pushes only to a channel it has joined;
-  - in Pusher, client events go only to private channels the client is subscribed to;
-  - in Socket.IO, a client cannot target a room at all.
+- **Key length.** MQTT topic names "MUST NOT encode to more than 65,535 bytes", and Pusher channel names are limited to 164 characters including the `private-`/`presence-` prefix. The 255-byte limit here comes from the one-byte length in the binary header (decision 6).
+- **Publishing without a subscription.** This design follows the broker model, where publishing and subscribing are independent:
+  - Redis Pub/Sub categorizes messages "without knowledge of what (if any) subscribers there may be";
+  - NATS and MQTT treat publish and subscribe as separate operations with separate permissions;
+  - Ably can publish over REST "outside the context of any specific connection";
+  - in Kafka, "producers and consumers are fully decoupled and agnostic of each other".
+
+  Room-style products tie publishing to membership instead:
+  - Phoenix: "Clients must join a channel to send and receive PubSub events on that channel".
+  - Pusher: client events "can only be triggered on private and presence channels", "the user must be subscribed to the channel", and they must be enabled in the app settings.
+  - Socket.IO: rooms are server-side (`join` exists only on the server socket), so server code decides which rooms an event reaches.
+  - Centrifugo offers both: `allow_publish_for_subscriber` requires the subscription, and `allow_publish_for_client` explicitly does not.
 
   Those products have an application server in the middle that does the real publishing, so room membership doubles as a permission. This gateway has no application server inside it: a backend that publishes is just another connection. Requiring a subscription would force it to receive a topic's whole traffic just to write to it, and would break fan-in uses (telemetry, a backend publishing notices it never reads). It would not protect anything either, since any connection may subscribe. The `from` field is set by the gateway, so a publisher cannot impersonate another connection.
 
