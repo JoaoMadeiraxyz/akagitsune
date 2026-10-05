@@ -258,7 +258,7 @@ A topic has no existence of its own. It is the set of connections subscribed to 
 
 - **An owner.** Any connection may subscribe and publish to any key, and nobody can close a topic for others.
 - **Namespacing.** Keys are compared byte for byte, and the gateway gives no meaning to `/`, `.`, `:` or case. Two unrelated applications that choose the same key share one topic. Separating them, for example with a prefix such as `app-a/…`, is the consuming application's job. The README recommends it, and the gateway does not enforce it.
-- **Access control.** Nothing restricts who subscribes to what, so a connection can read every topic whose key it can guess. This matches the gateway as it is today, which has no authentication, but it is the main gap compared with the market (below).
+- **Access control.** Nothing restricts who subscribes to what or who publishes where, so a connection can read every topic whose key it can guess and inject frames into it, always under its own `from` id. This matches the gateway as it is today, which has no authentication, but it is the main gap compared with the market (below).
 - **Retention.** Nothing is kept for late subscribers. That would be the replay buffer, a borderline case in `docs/scope.md`.
 - **Publish feedback.** A publisher does not learn how many connections received a frame, or whether the topic existed.
 
@@ -272,13 +272,19 @@ Where this design differs, and why:
 - **Publish feedback.** Redis `PUBLISH` returns the receiver count; NATS and MQTT return nothing. This design follows NATS and MQTT, because a count would need a reply frame per publish, which doubles a heavy publisher's control traffic.
 - **Wildcards.** NATS, MQTT and Redis `PSUBSCRIBE` offer them. They are left out because they turn the exact-key lookup on every publish into pattern matching, and `docs/scope.md` lists predicate subscriptions as borderline.
 - **Key length.** MQTT allows up to 65,535 bytes and Pusher 164 characters for a channel name. The 255-byte limit here comes from the one-byte length in the binary header (decision 6).
+- **Publishing without a subscription.** This design follows the broker model: publishing and subscribing are independent. Redis `PUBLISH`, NATS, MQTT and Ably let a client publish to a topic it does not subscribe to, and Kafka and Google Pub/Sub keep producers and consumers as separate roles. Room-style products tie them together instead:
+  - in Phoenix, a client pushes only to a channel it has joined;
+  - in Pusher, client events go only to private channels the client is subscribed to;
+  - in Socket.IO, a client cannot target a room at all.
+
+  Those products have an application server in the middle that does the real publishing, so room membership doubles as a permission. This gateway has no application server inside it: a backend that publishes is just another connection. Requiring a subscription would force it to receive a topic's whole traffic just to write to it, and would break fan-in uses (telemetry, a backend publishing notices it never reads). It would not protect anything either, since any connection may subscribe. The `from` field is set by the gateway, so a publisher cannot impersonate another connection.
 
 ### Extension points (not implemented)
 
 - **Presence:** the topic's `Arc<[Subscriber]>` is the member list. Join and leave events hook the same compute that changes membership.
 - **Direct delivery by id:** a second lock-free map `Uuid → Subscriber`, filled at connect and emptied by the same `Drop`, delivering through the same `inbox.send` path.
 - **Backplane:** the first local subscriber of a topic makes the instance subscribe to it on the backplane, and removing the empty entry unsubscribes it. A local publish fans out locally and is sent once to the backplane. Remote frames enter through the same fanout function.
-- **Authorization (expected next step):** `subscribe`, and `publish` if publishing is ever restricted, are the single choke points where a connect-time credential can be checked against a key. A prefix convention, such as Pusher's `private-` or Centrifugo's namespaces, would let the rule stay payload-agnostic. Authentication at connect time has to come first (decision 4 in `docs/decisions.md`).
+- **Authorization (expected next step):** `subscribe` and `publish` are the single choke points where a connect-time credential can be checked against a key. They need separate read and write permissions, as in NATS (subject publish/subscribe permissions), MQTT ACLs (read/write) and Ably capabilities. A connection may be allowed to publish to a topic without being allowed to read it (fan-in), or the reverse (a read-only consumer). Gating writes by requiring a subscription is not an option, for the reasons under *Market comparison*. A prefix convention, such as Pusher's `private-` or Centrifugo's namespaces, would let the rule stay payload-agnostic. Authentication at connect time has to come first (decision 4 in `docs/decisions.md`).
 
 ## Decision entries for `docs/decisions.md`
 
