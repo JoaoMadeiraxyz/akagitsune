@@ -6,7 +6,7 @@
 
 ## 2. Spec
 
-- [ ] 2.1 Replace the requirement's `Teste:` line in the delta with the test and its `tests/gateway.rs:<line>`
+- [x] 2.1 Replace the requirement's `Teste:` line in the delta with the test and its `tests/gateway.rs:<line>`
 
 ## 3. Verify
 
