@@ -134,7 +134,8 @@ Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.
 - **AND** a later valid frame from it is still processed
 
 #### Scenario: Escaped and literal forms are the same topic
-- **WHEN** connection B subscribes to `"é"` and connection A publishes to `"é"`
+- **WHEN** connection B subscribes with the topic written as the JSON escape `"\u00e9"`
+- **AND** connection A publishes with the topic written as the literal character `"é"`
 - **THEN** B receives the `message` frame
 
 ### Requirement: A connection holds at most 64 subscriptions

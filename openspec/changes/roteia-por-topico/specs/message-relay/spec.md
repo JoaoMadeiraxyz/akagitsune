@@ -15,8 +15,8 @@ Teste: planned — `tests/gateway.rs` — `payload_is_relayed_verbatim_to_others
 
 #### Scenario: Payload bytes are kept exactly
 - **WHEN** connection B is subscribed to `k`
-- **AND** connection A sends `{"type":"publish","topic":"k","data":{"b":1,  "a":[ 1,2 ],"u":"é","n":1.50}}`
-- **THEN** B receives exactly the text `{"type":"message","topic":"k","from":"<A's id>","data":{"b":1,  "a":[ 1,2 ],"u":"é","n":1.50}}`
+- **AND** connection A sends `{"type":"publish","topic":"k","data":{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}}`
+- **THEN** B receives exactly the text `{"type":"message","topic":"k","from":"<A's id>","data":{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}}`
 
 #### Scenario: Surrounding whitespace is dropped
 - **WHEN** connection B is subscribed to `k`
