@@ -2,7 +2,7 @@
 
 ## 1. Tests
 
-- [ ] 1.1 Add `delivery_resumes_after_a_warning` to `tests/gateway.rs` as described in design.md
+- [x] 1.1 Add `delivery_resumes_after_a_warning` to `tests/gateway.rs` as described in design.md
 - [ ] 1.2 Add `slow_receiver_does_not_hold_back_others` to `tests/gateway.rs` as described in design.md: chunks of 100 in lockstep with C, then B must hold a `warning`
 
 ## 2. Spec
