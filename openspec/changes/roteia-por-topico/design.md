@@ -199,12 +199,43 @@ Same invocation does not mean same system. After the implementation:
 - New baselines come from a full `scripts/bench.sh --all` run on the new code, after `scripts/calibrate.sh` passes, recorded with hardware, profile, commit and invocation as the table already requires.
 - Both sets come from the same calibrated instrument, so for the `topics = 1` scenarios this change's PR can show a real before/after comparison. That comparison is the evidence for this change only. Later changes compare against post-change baselines.
 
+### 12. Topic lifecycle
+
+A topic has no existence of its own. It is the set of connections subscribed to a key, and the registry entry exists exactly while that set is non-empty. There is no create, delete, declare or configure operation, and none is planned.
+
+| Stage | What happens | Where |
+|---|---|---|
+| **Does not exist** | No registry entry. A `publish` to the key is discarded, and nothing is created or retained. The publisher is not told. | decision 2, `topic-routing` spec |
+| **Created** | The first `subscribe` to a valid key (1–255 bytes of UTF-8) inserts the entry with one subscriber. The connection receives `subscribed` only after the insert. A `publish` never creates a topic. | decisions 2 and 7 |
+| **Active** | Further `subscribe`s join it and each `unsubscribe` leaves it, both by copy-on-write. Every publish fans out to the members present when it reads the entry. | decisions 2 and 3 |
+| **Emptied** | The `unsubscribe` or disconnect (`Drop` of `Subscriptions`) that removes the last member also removes the entry, in the same atomic compute. A concurrent `subscribe` either lands before, so the entry stays, or after, so it creates a new one. It is never lost. | decisions 2 and 8 |
+| **Re-created** | A later `subscribe` to the same key starts a new topic. Nothing from before survives: no frames, no member list, no settings. A frame published while the topic was empty is never delivered to anyone. | `topic-routing` spec |
+
+**What a topic does not have:**
+
+- **An owner.** Any connection may subscribe and publish to any key, and nobody can close a topic for others.
+- **Namespacing.** Keys are compared byte for byte, and the gateway gives no meaning to `/`, `.`, `:` or case. Two unrelated applications that choose the same key share one topic. Separating them, for example with a prefix such as `app-a/…`, is the consuming application's job. The README recommends it, and the gateway does not enforce it.
+- **Access control.** Nothing restricts who subscribes to what, so a connection can read every topic whose key it can guess. This matches the gateway as it is today, which has no authentication, but it is the main gap compared with the market (below).
+- **Retention.** Nothing is kept for late subscribers. That would be the replay buffer, a borderline case in `docs/scope.md`.
+- **Publish feedback.** A publisher does not learn how many connections received a frame, or whether the topic existed.
+
+**Market comparison.** This lifecycle is the norm for ephemeral real-time pub/sub. In Redis Pub/Sub, NATS core subjects, MQTT brokers, Socket.IO rooms, Phoenix channels, Pusher, Ably and Centrifugo, a topic exists through use and disappears when unused. Explicit creation belongs to brokers whose topics hold durable state (Kafka, Google Pub/Sub, SNS, RabbitMQ exchanges and queues), and this gateway holds none.
+
+This comparison is from the author's knowledge of those systems and was not re-verified against their current documentation for this proposal.
+
+Where this design differs, and why:
+
+- **Access control.** Almost every real-time product gates subscriptions: MQTT ACLs, NATS subject permissions, Phoenix `join/3`, Pusher `private-` channels. In Socket.IO only the server can place a connection in a room. This change leaves it out because the gateway has no authentication to build on. It is the expected next step after topics, and `subscribe` is the single choke point where it goes (*Extension points*).
+- **Publish feedback.** Redis `PUBLISH` returns the receiver count; NATS and MQTT return nothing. This design follows NATS and MQTT, because a count would need a reply frame per publish, which doubles a heavy publisher's control traffic.
+- **Wildcards.** NATS, MQTT and Redis `PSUBSCRIBE` offer them. They are left out because they turn the exact-key lookup on every publish into pattern matching, and `docs/scope.md` lists predicate subscriptions as borderline.
+- **Key length.** MQTT allows up to 65,535 bytes and Pusher 164 characters for a channel name. The 255-byte limit here comes from the one-byte length in the binary header (decision 6).
+
 ### Extension points (not implemented)
 
 - **Presence:** the topic's `Arc<[Subscriber]>` is the member list. Join and leave events hook the same compute that changes membership.
 - **Direct delivery by id:** a second lock-free map `Uuid → Subscriber`, filled at connect and emptied by the same `Drop`, delivering through the same `try_reserve` path.
 - **Backplane:** the first local subscriber of a topic makes the instance subscribe to it on the backplane, and removing the empty entry unsubscribes it. A local publish fans out locally and is sent once to the backplane. Remote frames enter through the same fanout function.
-- **Authorization:** `subscribe` is the single choke point where a connect-time credential can be checked.
+- **Authorization (expected next step):** `subscribe`, and `publish` if publishing is ever restricted, are the single choke points where a connect-time credential can be checked against a key. A prefix convention, such as Pusher's `private-` or Centrifugo's namespaces, would let the rule stay payload-agnostic. Authentication at connect time has to come first (decision 4 in `docs/decisions.md`).
 
 ## Decision entries for `docs/decisions.md`
 
@@ -216,9 +247,9 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 **Context.** One global bus made fanout O(N²) and made targeted delivery impossible (entry 8). Topics need the client to say what it wants, which entry 4 had ruled out by having no client-to-server protocol.
 
-**Decision.** Clients send `subscribe`, `unsubscribe` and `publish` control frames. A publish reaches only the other subscribers of its topic, as `{"type":"message","topic":…,"from":…,"data":…}`. The gateway parses its own control frame and still never deserializes `data`. A topic is an opaque key of 1–255 bytes of UTF-8, compared byte for byte. The global bus is removed: "everyone" is a topic everyone subscribes to. Supersedes entries 4 and 8.
+**Decision.** Clients send `subscribe`, `unsubscribe` and `publish` control frames. A publish reaches only the other subscribers of its topic, as `{"type":"message","topic":…,"from":…,"data":…}`. The gateway parses its own control frame and still never deserializes `data`. A topic is an opaque key of 1–255 bytes of UTF-8, compared byte for byte. It exists only while it has subscribers: the first `subscribe` creates it, removing the last subscriber deletes it, a `publish` never creates it, and nothing is retained across an empty period. Topics have no owner, no namespace and no access control. The global bus is removed: "everyone" is a topic everyone subscribes to. Supersedes entries 4 and 8.
 
-**Consequence.** Breaking change for every client. Fanout is bounded by topic size. The gateway now has a client protocol to version and test. Anything a client wants beyond routing still goes inside `data`.
+**Consequence.** Breaking change for every client. Fanout is bounded by topic size. The gateway now has a client protocol to version and test. Anything a client wants beyond routing still goes inside `data`. Applications sharing a gateway must avoid key collisions themselves, and any connection can read any topic until subscription authorization is added, which is the expected next step.
 
 ---
 
@@ -254,6 +285,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ## Risks / Trade-offs
 
+- **Open subscriptions.** Any connection can subscribe to any key, so topic keys are not a secret and must not be treated as one. This is documented in the README and entry 12, and authorization is named as the next step (decision 12).
 - **Breaking every client.** This is accepted and recorded in entry 12. The README protocol section is rewritten as the reference.
 - **New dependency on the hot path.** `papaya` correctness under concurrent compute and remove is load-bearing. Mitigation: integration tests that subscribe and unsubscribe concurrently with publishing, and a bench run.
 - **Fanout concentrated in one task.** A single very large topic adds latency proportional to its size for its last subscriber (decision 3). The bench row `goal-1m-fanout` at `T = 1` measures the worst case directly.

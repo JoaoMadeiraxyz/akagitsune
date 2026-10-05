@@ -76,6 +76,48 @@ Teste: planned — `tests/gateway.rs` — `disconnect_leaves_other_subscribers_w
 - **AND** connection A then publishes 100 frames to `k`
 - **THEN** C receives all 100 in order
 
+### Requirement: A topic exists only while it has subscribers
+A topic SHALL come into existence when the first connection subscribes to its key, and SHALL cease to exist when its last subscriber leaves by `unsubscribe` or disconnection. A `publish` SHALL NOT create a topic. The gateway SHALL NOT retain any frame, member or setting for a topic across a period in which it had no subscribers, and a frame published during such a period SHALL NOT be delivered to any connection that subscribes later.
+
+Fonte: planned — `src/registry.rs` — `TopicRegistry`; `src/registry.rs` — `Subscriptions`.
+Teste: planned — `tests/gateway.rs` — `publish_before_any_subscription_is_not_retained`; `tests/gateway.rs` — `emptied_topic_starts_over`.
+
+#### Scenario: Publish before any subscription is not retained
+- **WHEN** connection A publishes `{"seq":1}` to `k` while no connection is subscribed to `k`
+- **AND** connection B then subscribes to `k` and receives `subscribed`
+- **AND** A then publishes `{"seq":2}` to `k`
+- **THEN** B receives only the frame with `{"seq":2}`
+
+#### Scenario: Emptied topic starts over
+- **WHEN** connection B subscribes to `k`, then unsubscribes and receives `unsubscribed`, leaving `k` without subscribers
+- **AND** connection A publishes `{"seq":1}` to `k`
+- **AND** B subscribes to `k` again and receives `subscribed`, and A then publishes `{"seq":2}`
+- **THEN** B receives only the frame with `{"seq":2}`
+
+#### Scenario: Topic emptied by disconnection starts over
+- **WHEN** connection B, the only subscriber of `k`, closes its socket
+- **AND** connection A publishes `{"seq":1}` to `k`
+- **AND** a new connection C subscribes to `k` and receives `subscribed`, and A then publishes `{"seq":2}`
+- **THEN** C receives only the frame with `{"seq":2}`
+
+### Requirement: Topics have no owner and no access control
+Any connection SHALL be able to subscribe and publish to any valid topic key, regardless of which connection subscribed to it first. No connection SHALL be able to close a topic or remove other connections from it. Connections that choose the same key SHALL share the same topic.
+
+Fonte: planned — `src/ws.rs` — `handle_socket`; `src/registry.rs` — `TopicRegistry`.
+Teste: planned — `tests/gateway.rs` — `any_connection_can_join_any_topic`.
+
+#### Scenario: Unrelated connections share a key
+- **WHEN** connection B subscribes to `k`
+- **AND** an unrelated connection C subscribes to `k`
+- **AND** connection A publishes to `k`
+- **THEN** both B and C receive the `message` frame
+
+#### Scenario: First subscriber cannot exclude others
+- **WHEN** connection B subscribes to `k` first, and connection C subscribes to `k` afterwards
+- **AND** B unsubscribes from `k`
+- **AND** connection A publishes to `k`
+- **THEN** C still receives the `message` frame
+
 ### Requirement: Topics are 1 to 255 bytes of UTF-8
 The gateway SHALL accept as a topic any string of 1 to 255 bytes of UTF-8, measured after JSON unescaping, and SHALL compare topics byte for byte. A `subscribe`, `unsubscribe` or `publish` whose topic is empty or longer than 255 bytes SHALL be answered with `{"type":"error","message":"<INVALID_TOPIC>"}`, SHALL have no other effect, and SHALL leave the connection open.
 

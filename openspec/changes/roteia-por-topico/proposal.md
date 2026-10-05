@@ -27,7 +27,13 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
   - Inbound: `[topic length: u8][topic: UTF-8][payload]`.
   - Delivered: `[topic length: u8][topic][sender uuid: 16 bytes][payload]`.
   - The header is built once per publish. Binary receivers now learn the sender, which removes the trade-off recorded in decision 3.
-- Publishing does not require a subscription. A publish to a topic with no subscribers is a silent no-op. Senders never receive their own frames, even when subscribed.
+- **Topic lifecycle, stated explicitly** (`design.md` decision 12):
+  - A topic exists only while at least one connection is subscribed to it. The first `subscribe` creates it, and removing the last subscriber (by `unsubscribe` or disconnect) deletes it.
+  - A `publish` never creates a topic. Publishing to a topic with no subscribers is a silent no-op.
+  - Nothing is retained across an empty period: a topic re-created later starts from nothing.
+  - Topics have no owner, no namespace and no access control. Two applications that choose the same key share it.
+  - This is how ephemeral real-time pub/sub works in Redis, NATS, MQTT, Socket.IO and similar systems. The gap compared with them is subscription authorization.
+- Publishing does not require a subscription. Senders never receive their own frames, even when subscribed.
 - New limits, each answered with an `error` frame while the connection stays open:
   - topics of 1 to 255 bytes of UTF-8;
   - at most 64 subscriptions per connection.
@@ -62,3 +68,4 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
 - **Existing benchmarks become invalid.** By the time this change starts, the global-bus numbers in `docs/architecture.md` will have been re-measured by `prepara-harness-para-topicos` with the new harness. This change replaces exactly the part that dominates fanout: the bus, the bridge task per receiver and the lag mechanism. After implementation those rows describe a system that no longer exists. They move to a section marked as the old architecture, and new baselines are measured from scratch with `scripts/bench.sh --all`. Both sets come from the same instrument, so the PR can show a real before/after comparison (`design.md` decision 11).
 - **Depends on** `prepara-harness-para-topicos` being merged first.
 - **Out of scope:** presence, direct delivery by connection id, wildcard or predicate subscriptions, a backplane, and authorization of who may subscribe. The design keeps each one as an extension of the registry (see `design.md`). None is implemented here.
+- **Expected next step:** subscription authorization, which needs connect-time authentication first. Until it exists, any connection can subscribe to any topic, so a topic key must not be treated as a secret.
