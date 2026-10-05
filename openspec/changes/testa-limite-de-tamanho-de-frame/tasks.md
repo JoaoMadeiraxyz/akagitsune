@@ -2,7 +2,7 @@
 
 ## 1. Tests
 
-- [ ] 1.1 Add `frame_at_size_limit_is_relayed` to `tests/gateway.rs`: A sends a 65536-byte JSON string, B receives it in a `message` envelope with identical `data`
+- [x] 1.1 Add `frame_at_size_limit_is_relayed` to `tests/gateway.rs`: A sends a 65536-byte JSON string, B receives it in a `message` envelope with identical `data`
 - [ ] 1.2 Add `oversized_frame_drops_the_sender_without_relaying` to `tests/gateway.rs`: A sends a 65537-byte JSON string; A's stream ends with no `Close` frame; B stays silent
 
 ## 2. Docs

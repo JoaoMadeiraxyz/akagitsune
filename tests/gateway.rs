@@ -33,6 +33,10 @@ async fn assert_silent(client: &mut Client) {
     assert!(unexpected.is_err(), "unexpected frame: {unexpected:?}");
 }
 
+fn json_string_of_len(len: usize) -> String {
+    format!("\"{}\"", "x".repeat(len - 2))
+}
+
 async fn connect(url: &str) -> (Client, String) {
     let (mut client, _) = connect_async(url).await.unwrap();
     let welcome = next_json(&mut client).await;
@@ -46,6 +50,22 @@ async fn connection_is_welcomed_with_an_id() {
     let url = spawn_server().await;
     let (_client, id) = connect(&url).await;
     assert!(uuid::Uuid::parse_str(&id).is_ok(), "not a uuid: {id}");
+}
+
+#[tokio::test]
+async fn frame_at_size_limit_is_relayed() {
+    let url = spawn_server().await;
+    let (mut a, a_id) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    let payload = json_string_of_len(64 * 1024);
+    a.send(WsMessage::text(payload.clone())).await.unwrap();
+
+    let data: Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(
+        next_json(&mut b).await,
+        json!({"type": "message", "from": a_id, "data": data})
+    );
 }
 
 #[tokio::test]
