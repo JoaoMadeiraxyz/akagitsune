@@ -18,8 +18,10 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
   - add `misrouted`, `dropped`, `unaccounted` and `unaccounted_scope`, and `subscribe_ack_p50_ms` / `subscribe_ack_p99_ms`;
   - follow the `null` rules for `legacy` from `design.md` decision 2;
   - add every meter to `--json` and describe them in `USAGE`
-- [ ] 1.6 Churn: add `--churn N` (`topics` only), with `N` extra connections alternating subscribe/unsubscribe on `t-0` once per second during the measured window, excluded from expected deliveries
-- [ ] 1.7 Unit tests (`cargo test --examples`) for:
+- [ ] 1.6 Churn: add `--churn N --churn-rate R` (`topics` only), with `N` extra connections alternating subscribe/unsubscribe on `t-0` at `R` ops/s each during the measured window. Exclude them from `--connections`, `offered()`, expected deliveries and `subscribe_failed`, and report `churn_failed` per `design.md` decision 1
+- [ ] 1.7 Drain: replace the fixed 1 s `DRAIN` with drain-until-quiet (`DRAIN_QUIET = 500 ms`, `--drain-max-ms`, default 30 000). Report `drained` and `drain_seconds`, make `unaccounted` and `churn_failed` `null` when not drained, and leave `closed_early` connections out of `unaccounted` (`design.md` decision 4)
+- [ ] 1.8 Unit tests (`cargo test --examples`) for:
+  - the drain stop rule (quiet period and limit);
   - expected deliveries with uneven acknowledgements;
   - the `T = 1` reduction to the old formula;
   - the `legacy` scope of `unaccounted`
@@ -32,7 +34,7 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 ## 3. calibrate.sh
 
 - [ ] 3.1 Run cases 1–4 under both protocols with their current predicted answers
-- [ ] 3.2 Add cases 5–10 from `design.md` decision 1. Cases 7–9 run under both protocols, and cases 5, 6 and 10 run under `topics` only. Every predicted value comes from arithmetic
+- [ ] 3.2 Add cases 5–12 from `design.md` decision 1. Cases 7–9, 11 and 12 run under both protocols, and cases 5, 6 and 10 run under `topics` only. Case 7 under `legacy` uses the expected deliveries of the non-publishing connections only. Every predicted value comes from arithmetic
 - [ ] 3.3 Get every case green. If one fails, fix the harness rather than widen a tolerance
 
 ## 4. bench.sh
@@ -40,12 +42,12 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 - [ ] 4.1 Add `--protocol legacy|topics` (default `legacy`), passed through to `loadgen`
 - [ ] 4.2 Change the scenario tuple to `name connections topics senders rate payload seconds [flags]`. A scenario that needs `topics` is skipped under `legacy` with a printed line
 - [ ] 4.3 CSV and output:
-  - add the `protocol`, `topics`, `binary`, `churn`, `subscribe_failed`, `subscribe_ack_p99_ms`, `misrouted`, `dropped`, `unaccounted` and `unaccounted_scope` columns;
+  - add the `protocol`, `topics`, `binary`, `churn`, `churn_rate`, `subscribe_failed`, `subscribe_ack_p99_ms`, `churn_failed`, `misrouted`, `dropped`, `unaccounted`, `unaccounted_scope`, `drained` and `drain_seconds` columns, the same list as `design.md` decision 1;
   - print the full invocation in the markdown table;
   - compute RSS per connection over every open connection
 - [ ] 4.4 Verdict:
   - `offered()` becomes `senders × rate × (conns / topics − 1)`;
-  - add `incorrect` when `misrouted > 0`, `unaccounted > 0` or `subscribe_failed > 0`, overriding every other verdict;
+  - add `incorrect` when `misrouted > 0`, `subscribe_failed > 0`, or, on a drained run, `unaccounted > 0` or `churn_failed > 0`, overriding every other verdict. Print `undrained` next to the verdict of a run that did not drain;
   - treat `null` meters as not measured, never as a pass
 - [ ] 4.5 Add the `topics-1k`, `topics-5k`, `binary-200` and `churn-500` scenarios to the baseline sweep and `goal-1m-topics` to the goal set, with the invocations from `design.md` decision 1
 
@@ -58,7 +60,7 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 - [ ] 6.1 `docs/architecture.md`:
   - replace the *Measured baselines* rows with the task 5.1 rows, moving the 2026-08-03 rows to a subsection titled as measured with the previous harness;
   - rewrite *Status* from the new rows, re-deriving the per-connection RSS and the cliff reading;
-  - add calibration cases 5–10, with predicted and measured values, to *Harness calibration*;
+  - add calibration cases 5–12, with predicted and measured values, to *Harness calibration*, and describe drain-until-quiet;
   - generalize the definition of a delivery to `senders × rate × (connections / topics − 1)`
 - [ ] 6.2 `docs/decisions.md`: append entry 11 from `design.md` verbatim
 - [ ] 6.3 `.claude/skills/perf-check/SKILL.md`:

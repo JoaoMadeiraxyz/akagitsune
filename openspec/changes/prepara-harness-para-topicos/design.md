@@ -59,8 +59,15 @@ With topics, a run can be wrong in ways the old meters cannot see: a frame deliv
   - `misrouted`: frames whose `topic` is not the receiver's. It must be 0.
   - `dropped`: the sum of `dropped` over every `warning`.
   - `unaccounted`: over the whole run (warmup included, since a `warning` carries no timestamp), expected − received − dropped. Because the gateway's `warning` counts are exact (`delivery-backpressure`), a non-zero value means frames vanished without a warning. It must be 0.
+    - It is only meaningful once the run has fully drained (decision 4); otherwise it is reported as `null` with `drained: false`.
+    - Connections that closed early (`closed_early`) are left out of it, together with their expected and received counts, and are reported separately.
+    - `unaccounted_scope` says how many connections it covers.
   - `subscribe_ack_p50_ms` and `subscribe_ack_p99_ms`: the setup cost of joining topics, which for the gateway is the registry's copy-on-write, measured outside the clock.
-- **Churn.** `--churn N` opens `N` extra connections that, during the measured window, alternately subscribe to and unsubscribe from topic `t-0` at one operation per second each. Their receptions are excluded from expected deliveries. The steady members' delivery and latency show what membership churn costs a publish (the copy-on-write risk in `roteia-por-topico` design decision 2).
+- **Churn.** `--churn N --churn-rate R` opens `N` extra connections that, during the measured window, alternately subscribe to and unsubscribe from topic `t-0`, each at `R` operations per second (default 1). The steady members' delivery and latency show what membership churn costs a publish (the copy-on-write risk in `roteia-por-topico` design decision 2). Churn connections are separate from the measured topology:
+  - they are not part of `--connections`, so they are not in `offered()` or in the expected deliveries, and their receptions are ignored;
+  - they are not in `subscribe_failed`, which covers only the setup subscriptions before the clock;
+  - a churn `subscribe` or `unsubscribe` still without its acknowledgement when the drain completes counts in `churn_failed`. The gateway never drops control replies (`roteia-por-topico` design decision 4), so after a completed drain a missing one is a defect. Before a completed drain it may just be late, so `churn_failed` is `null` when `drained` is false;
+  - RSS per connection divides by every open connection, churners included.
 - **Unit tests.** `cargo test --examples` covers the expected-delivery arithmetic for uneven acknowledgements, alongside the existing histogram tests.
 
 **`refserver`**
@@ -80,11 +87,13 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
 | Case | Setup | Predicted |
 |---|---|---|
 | 5 topics | 200 connections, `--topics 10`, 10 senders at 50/s, 10 s measured | 5,000 published, 95,000 delivered (5,000 × 19), 100%, `misrouted` 0, `unaccounted` 0 |
-| 6 misrouting meter | case 5 against `--ignore-topics` | every publish reaches all 199 other connections: 95,000 correctly routed and `misrouted` = 900,000 (5,000 × 180), which shows the meter detects leaks |
-| 7 silent loss | case 3 (1-in-10 loss, no warnings) | delivery 90%, `dropped` 0, `unaccounted` ≈ 10% of expected |
+| 6 misrouting meter | case 5 against `--ignore-topics` | every publish reaches all 199 other connections. `received` stays 95,000 and delivery stays 100%, because a frame on the wrong topic is never counted as received or as a delivery. `misrouted` = 900,000 (5,000 × 180), which shows the meter detects leaks |
+| 7 silent loss | case 3 (1-in-10 loss, no warnings) | delivery 90%, `dropped` 0, `unaccounted` ≈ 10% of the expected deliveries within its scope. Under `topics` the scope is every connection. Under `legacy` it is only the connections that do not publish, so the expected count used is theirs (case 3: each frame is expected at the 95 connections that do not publish, not at all 99 others) |
 | 8 reported loss | case 3 with `--warn-drops` | delivery 90%, `dropped` ≈ 10% of expected, `unaccounted` 0 |
 | 9 binary | case 1 with `--binary` | same counts as case 1 |
-| 10 churn exclusion | case 5 with `--churn 20` | steady members' delivery 100% and `unaccounted` 0, so churners are excluded correctly |
+| 10 churn exclusion | case 5 with `--churn 20 --churn-rate 5` | steady members' delivery 100%, `unaccounted` 0 and `churn_failed` 0, so churners are excluded correctly |
+| 11 undrained run | 20 connections, 1 sender at 20/s, 10 s measured, against `--delay-ms 2000`, with `--drain-max-ms 500` | `drained` false, `unaccounted` and `churn_failed` `null`, never a positive number, so an incomplete drain cannot read as `incorrect` |
+| 12 drained run | case 11 with the default drain limit | `drained` true, `drain_seconds` ≥ 2, delivery 100%, `unaccounted` 0 |
 
 **`bench.sh`**
 
@@ -96,12 +105,17 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
   | `topics-1k` | `--connections 1000 --topics 100 --senders 100 --rate 100` | 90 000 deliveries/s | Topic routing at moderate size. |
   | `topics-5k` | `--connections 5000 --topics 500 --senders 500 --rate 100` | 450 000 deliveries/s | Same topic size, five times the connections: latency should stay flat if fanout is bounded by topic size. |
   | `binary-200` | `fanout-200` with `--binary` | same as `fanout-200` | Binary relay cost. Under `topics`, that includes building the header once per publish. |
-  | `churn-500` | `fanout-500` with `--churn 100` | same as `fanout-500` | Membership churn under load. |
+  | `churn-500` | `fanout-500` with `--churn 200 --churn-rate 50` | same as `fanout-500` | Membership churn under load: 10 000 subscribe/unsubscribe operations per second on a 500-member topic. Each one copies a slice of about 500 handles of roughly 24 bytes, about 12 KB, so on the order of 120 MB/s of copy-on-write, which is enough to show in latency if the design's trade is wrong. A rate of 1 op/s per churner would barely touch the copy-on-write and would prove nothing. Both figures are estimates, not measurements. |
   | `goal-1m-topics` (goal set) | `--connections 2100 --topics 100 --senders 100 --rate 500` | exactly 1 000 000 deliveries/s across 100 topics of 21 | The goal delivery rate with fanout bounded by topic size. This is the row that shows whether topic routing pays off. |
 
-- **CSV:** gains `topics`, `binary`, `churn`, `subscribe_failed`, `subscribe_ack_p99_ms`, `misrouted`, `dropped` and `unaccounted`. The markdown table prints the full invocation.
-- **Verdict.** `offered()` becomes `senders × rate × (conns / topics − 1)`. A new verdict, `incorrect`, applies when `misrouted > 0`, `unaccounted > 0` or `subscribe_failed > 0`, and it overrides every other verdict: a fast run that routes wrongly is not a performance result.
-- **RSS per connection** divides by every open connection, churners included.
+- **CSV:** gains `protocol`, `topics`, `binary`, `churn`, `churn_rate`, `subscribe_failed`, `subscribe_ack_p99_ms`, `churn_failed`, `misrouted`, `dropped`, `unaccounted`, `unaccounted_scope`, `drained` and `drain_seconds`. The markdown table prints the full invocation.
+- **Verdict.** `offered()` becomes `senders × rate × (conns / topics − 1)`, where `conns` is `--connections` without churners. A new verdict, `incorrect`, applies when any of these holds, and it overrides every other verdict, because a fast run that routes wrongly is not a performance result:
+  - `misrouted > 0`;
+  - `subscribe_failed > 0`;
+  - `unaccounted > 0` on a drained run;
+  - `churn_failed > 0` on a drained run.
+
+  A `null` meter never triggers it. An undrained run gets the usual verdict (typically `cliff` or `harness-bound`) with `undrained` printed next to it.
 
 ### 2. Both protocols until topic routing lands
 
@@ -115,7 +129,7 @@ Under `legacy`:
 - `--topics` must be 1 and `--churn` is rejected. `misrouted` and `subscribe_*` are reported as `null`, not as 0, so a legacy row can never look like it passed a routing check.
 - `unaccounted` is computed only over connections that do not publish. On the current gateway, a lagging publisher's `Lagged(n)` also counts its own frames, which the bridge would have skipped anyway. Its `dropped` therefore over-counts, and `unaccounted` would go negative for it. The existing exact-count test (`tests/gateway.rs:235`) uses a non-publishing receiver for the same reason. Scenarios where every connection publishes (`ingest-50`) report `unaccounted` as `null`, with `unaccounted_scope` naming how many connections were counted.
 
-Under `topics`, the publisher never sends to its own inbox (`roteia-por-topico` design decision 4), so `dropped` never includes a connection's own frames and `unaccounted` covers every connection. That design drops the oldest frames and reports `Lagged(n)` as soon as the receiver reads again, so every discard is eventually reported. Even on an overloaded run, `unaccounted` stays 0 once the drain finishes. A design that dropped the newest frames and reported them only before the next delivered frame would leave the last discards unreported, and every overloaded run would wrongly come out `incorrect`.
+Under `topics`, the publisher never sends to its own inbox (`roteia-por-topico` design decision 4), so `dropped` never includes a connection's own frames and `unaccounted` covers every connection. That design drops the oldest frames and reports `Lagged(n)` as soon as the receiver reads again, so every discard is eventually reported. Even on an overloaded run, `unaccounted` stays 0 once the drain completes (decision 4). A design that dropped the newest frames and reported them only before the next delivered frame would leave the last discards unreported, and every overloaded run would wrongly come out `incorrect`.
 
 **Alternative rejected:** shipping `topics` only and accepting a broken `bench.sh` on `main` until the gateway change. The window would have no end date, and the current gateway could never be measured with the new instrument.
 
@@ -123,12 +137,31 @@ Under `topics`, the publisher never sends to its own inbox (`roteia-por-topico` 
 
 The `perf-check` skill already states that a change to `loadgen` or `refserver` invalidates every baseline taken with the old one. So this change:
 
-1. passes `scripts/calibrate.sh` (cases 1–10);
+1. passes `scripts/calibrate.sh` (cases 1–12);
 2. runs `scripts/bench.sh --all --protocol legacy` against the current gateway on `main`;
 3. replaces the 2026-08-03 rows in *Measured baselines* with the new rows, with hardware, profile, commit and invocation. The 2026-08-03 rows move to a subsection titled as measured with the previous harness;
 4. rewrites *Status* from the new rows.
 
 These rows are the global-bus "before" of `roteia-por-topico`. That change marks them as the old architecture once it lands.
+
+### 4. Drain until the counts settle, not for a fixed second
+
+Today `loadgen` stops reading a fixed `DRAIN` of 1 s after the send window (`examples/loadgen.rs:13`) and never checks that delivery finished. Under overload that is far too short. The `cliff-300` row in `docs/architecture.md` has a response p99 of 5.4 s with `loadgen` at 1068% CPU, so frames are still queued when reading stops. With a fixed drain, `unaccounted` would be positive on that row and mark the current, correct gateway `incorrect` in this change's own re-baseline. Connections that close early would have the same effect.
+
+**Choice:**
+
+- After the send window, every reader keeps reading. A shared timestamp records the latest arrival on any connection. The drain completes when no frame has arrived for `DRAIN_QUIET = 500 ms`, and is abandoned after `--drain-max-ms` (default 30 000).
+- `--json` reports `drained` and `drain_seconds`.
+- `unaccounted` and `churn_failed` are computed only when `drained` is true, and are `null` otherwise.
+- `closed_early` connections are left out of `unaccounted` and reported separately, as today.
+- Calibration cases 11 and 12 prove both sides with arithmetic: an injected 2 s delay with a 500 ms drain limit must give `null`, never a positive count, and the same run with the default limit must give `drained` true and `unaccounted` 0.
+
+**Consequence for the numbers:**
+
+- Frames that arrive after the old 1-second cutoff are now counted. They still belong to the measured window by their publish stamp. So overloaded rows can show higher delivery and a longer response tail than the 2026-08-03 table did. That is the instrument telling more of the truth, and one more reason those rows are superseded rather than compared.
+- Clean rows are unaffected: they drain within milliseconds.
+
+**Alternative rejected:** a longer fixed drain. Any fixed value is either too short for some overloaded run or wastes time on every clean one, and it still cannot tell "drained" from "gave up".
 
 ## Decision entry for `docs/decisions.md`
 
@@ -138,7 +171,7 @@ These rows are the global-bus "before" of `roteia-por-topico`. That change marks
 
 **Context.** The harness from entry 10 assumed one global bus: every frame reaches every other connection, a connection is ready on `welcome`, and nothing can be misrouted. Topic routing breaks each of those assumptions. It also makes new failures possible, such as a frame delivered to a non-subscriber or lost without a `warning`, which a speed-only harness reports as a clean pass.
 
-**Decision.** `loadgen` computes expected deliveries per topic from acknowledged members. It reports `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement latency, and it can publish binary frames and churn memberships. `refserver` gains `--warn-drops` and `--ignore-topics`, so each new meter has a calibration case with a known answer. `bench.sh` gains an `incorrect` verdict that overrides any other. Both the old and the topic protocol are supported until topic routing lands, so `main` stays measurable and the current gateway gets a same-instrument baseline.
+**Decision.** `loadgen` computes expected deliveries per topic from acknowledged members. It reports `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement latency, and it can publish binary frames and churn memberships. It drains until delivery settles instead of for a fixed second, and it reports `unaccounted` as `null` when the drain did not complete, so an overloaded but correct run is never called `incorrect`. `refserver` gains `--warn-drops` and `--ignore-topics`, so each new meter has a calibration case with a known answer. `bench.sh` gains an `incorrect` verdict that overrides any other. Both the old and the topic protocol are supported until topic routing lands, so `main` stays measurable and the current gateway gets a same-instrument baseline.
 
 **Consequence.** The 2026-08-03 baselines are superseded by a re-measurement with the new harness. A fast run that routes wrongly can no longer pass. The `legacy` protocol is temporary and is removed by the topic-routing change.
 
