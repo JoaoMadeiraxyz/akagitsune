@@ -112,7 +112,7 @@ Teste: planned — `tests/gateway.rs` — `any_connection_can_join_any_topic`.
 - **AND** connection A publishes to `k`
 - **THEN** both B and C receive the `message` frame
 
-#### Scenario: First subscriber cannot exclude others
+#### Scenario: Topic outlives its first subscriber
 - **WHEN** connection B subscribes to `k` first, and connection C subscribes to `k` afterwards
 - **AND** B unsubscribes from `k`
 - **AND** connection A publishes to `k`
