@@ -9,7 +9,7 @@ Defines what happens when a connection cannot keep up with the frames relayed to
 When a connection falls more than 256 frames behind the relay bus, the gateway SHALL discard the frames it missed, SHALL send it `{"type":"warning","dropped":<n>}` with `n` greater than zero equal to the number of frames discarded, and SHALL continue delivering from the current position of the bus.
 
 Fonte: `src/ws.rs:82` — `handle_socket`; `src/state.rs:7` — `BROADCAST_CAPACITY`; `src/protocol.rs:10` — `ServerMessage`.
-Teste: `tests/gateway.rs:172` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:194` — `delivery_resumes_after_a_warning`.
+Teste: `tests/gateway.rs:175` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:195` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:236` — `dropped_count_matches_the_frames_skipped`.
 
 #### Scenario: Slow consumer receives a warning
 - **WHEN** connection A sends 128000 text frames while connection B reads slower than they arrive
@@ -21,11 +21,17 @@ Teste: `tests/gateway.rs:172` — `slow_consumer_receives_a_warning_frame`; `tes
 - **AND** every `seq` B receives is strictly greater than the previous one
 - **AND** B receives the `{"marker":"end"}` frame
 
+#### Scenario: Dropped count is exact
+- **WHEN** connection A sends 128000 text frames `{"seq":<i>}` followed by `{"marker":"end"}` while connection B lags
+- **THEN** B receives at least one `warning`
+- **AND** each `seq` B receives equals the previous `seq` plus one (or 0 for the first) plus the sum of `dropped` in the warnings received since the previous `seq`
+- **AND** the number of frames B receives, marker included, plus the sum of every `dropped` equals 128001
+
 ### Requirement: Publishing never waits for a slow receiver
 The gateway SHALL accept and relay a sender's frames regardless of how far behind any receiving connection is; a slow receiver SHALL only cause frames to be dropped for itself.
 
 Fonte: `src/ws.rs:114` — `handle_socket`; `src/ws.rs:89` — `handle_socket`.
-Teste: `tests/gateway.rs:235` — `slow_receiver_does_not_hold_back_others`.
+Teste: `tests/gateway.rs:286` — `slow_receiver_does_not_hold_back_others`.
 
 #### Scenario: Other connections keep receiving
 - **WHEN** connection B stops reading while connection A sends 128000 text frames `{"seq":<i>}` in chunks of 100, each chunk sent after connection C received the previous one, followed by `{"marker":"end"}`
