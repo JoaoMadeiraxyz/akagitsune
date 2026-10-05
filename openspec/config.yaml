@@ -34,6 +34,7 @@ context: |
   Verification, as measured in .github/workflows/ci.yml:
     One job, on push to main and on every pull_request:
     `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+    The job fails after `timeout-minutes: 10` (slowest of 45 measured runs: 59 s).
     `main` has no branch protection and no rulesets, so a red CI does not
     block a merge; the reviewer must check the run before merging.
     Benchmarks (`scripts/bench.sh`) never run in CI; they are manual and local.

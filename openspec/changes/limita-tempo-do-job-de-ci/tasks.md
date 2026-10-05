@@ -6,7 +6,7 @@
 
 ## 2. Context
 
-- [ ] 2.1 Add the 10-minute job limit to the verification section of `openspec/config.yaml`
+- [x] 2.1 Add the 10-minute job limit to the verification section of `openspec/config.yaml`
 
 ## 3. Verify
 
