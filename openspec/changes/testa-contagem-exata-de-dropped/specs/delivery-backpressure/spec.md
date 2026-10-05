@@ -6,7 +6,7 @@
 When a connection falls more than 256 frames behind the relay bus, the gateway SHALL discard the frames it missed, SHALL send it `{"type":"warning","dropped":<n>}` with `n` greater than zero equal to the number of frames discarded, and SHALL continue delivering from the current position of the bus.
 
 Fonte: `src/ws.rs:82` — `handle_socket`; `src/state.rs:7` — `BROADCAST_CAPACITY`; `src/protocol.rs:10` — `ServerMessage`.
-Teste: `tests/gateway.rs:172` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:194` — `delivery_resumes_after_a_warning`; `tests/gateway.rs` — `dropped_count_matches_the_frames_skipped` (to be created; line added at implementation).
+Teste: `tests/gateway.rs:175` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:195` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:236` — `dropped_count_matches_the_frames_skipped`.
 
 #### Scenario: Slow consumer receives a warning
 - **WHEN** connection A sends 128000 text frames while connection B reads slower than they arrive
