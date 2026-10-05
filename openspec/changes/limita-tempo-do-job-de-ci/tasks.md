@@ -10,6 +10,6 @@
 
 ## 3. Verify
 
-- [ ] 3.1 Author confirms locally that the workflow file still parses as YAML and that `timeout-minutes` sits under `jobs.check`, and that `openspec validate --all --strict` passes
+- [x] 3.1 Author confirms locally that the workflow file still parses as YAML and that `timeout-minutes` sits under `jobs.check`, and that `openspec validate --all --strict` passes
 - [ ] 3.2 CI runs on the implementation PR; a run that starts and finishes green shows GitHub accepted the workflow. `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 3.3 An independent session fills `verificacao.md`: placement of the key, the PR's CI run (link, duration, and that the job's recorded configuration came from this branch), and that `openspec/config.yaml` matches the workflow
