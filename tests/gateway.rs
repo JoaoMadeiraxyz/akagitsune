@@ -191,6 +191,84 @@ async fn slow_consumer_receives_a_warning_frame() {
 }
 
 #[tokio::test]
+async fn delivery_resumes_after_a_warning() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    for i in 0..128_000 {
+        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
+            .await
+            .unwrap();
+    }
+    a.send(WsMessage::text(json!({ "marker": "end" }).to_string()))
+        .await
+        .unwrap();
+
+    let mut warnings = 0;
+    let mut last_seq: Option<u64> = None;
+    loop {
+        let msg = next_json(&mut b).await;
+        match msg["type"].as_str() {
+            Some("warning") => {
+                assert!(msg["dropped"].as_u64().unwrap() > 0, "{msg}");
+                warnings += 1;
+            }
+            Some("message") if msg["data"] == json!({ "marker": "end" }) => break,
+            Some("message") => {
+                let seq = msg["data"]["seq"].as_u64().unwrap();
+                if let Some(prev) = last_seq {
+                    assert!(seq > prev, "seq {seq} arrived after {prev}");
+                }
+                last_seq = Some(seq);
+            }
+            _ => panic!("unexpected frame: {msg}"),
+        }
+    }
+    assert!(
+        warnings > 0,
+        "receiver never lagged, so resumption was not exercised"
+    );
+}
+
+#[tokio::test]
+async fn slow_receiver_does_not_hold_back_others() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    let (mut c, _) = connect(&url).await;
+
+    let chunk = 100;
+    for start in (0..128_000).step_by(chunk) {
+        for i in start..start + chunk {
+            a.send(WsMessage::text(json!({ "seq": i }).to_string()))
+                .await
+                .unwrap();
+        }
+        for i in start..start + chunk {
+            let msg = next_json(&mut c).await;
+            assert_eq!(msg["data"], json!({ "seq": i }), "{msg}");
+        }
+    }
+    a.send(WsMessage::text(json!({ "marker": "end" }).to_string()))
+        .await
+        .unwrap();
+    assert_eq!(next_json(&mut c).await["data"], json!({ "marker": "end" }));
+
+    loop {
+        let msg = next_json(&mut b).await;
+        if msg["type"] == "warning" {
+            break;
+        }
+        assert_ne!(
+            msg["data"],
+            json!({ "marker": "end" }),
+            "the idle receiver never fell behind, so the test exercised nothing"
+        );
+    }
+}
+
+#[tokio::test]
 async fn invalid_json_is_rejected_without_broadcasting() {
     let url = spawn_server().await;
     let (mut a, _) = connect(&url).await;
