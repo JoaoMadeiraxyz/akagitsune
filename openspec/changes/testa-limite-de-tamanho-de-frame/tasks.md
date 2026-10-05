@@ -7,7 +7,7 @@
 
 ## 2. Docs
 
-- [ ] 2.1 Update README "Limits" to say the sender's connection is dropped without a close frame
+- [x] 2.1 Update README "Limits" to say the sender's connection is dropped without a close frame
 - [ ] 2.2 Replace the requirement's `Teste:` line in the delta with the new tests and their `tests/gateway.rs:<line>`
 
 ## 3. Verify
