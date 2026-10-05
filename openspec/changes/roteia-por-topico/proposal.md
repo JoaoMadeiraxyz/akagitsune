@@ -33,7 +33,11 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
   - at most 64 subscriptions per connection.
 - Backpressure moves from the bus to each connection's outgoing queue of 256 frames. A full queue drops the frame for that receiver only, and the receiver is told with the same `{"type":"warning","dropped":n}` frame, placed exactly where the gap is.
 - Each connection runs two tasks (reader, writer) instead of three. The bridge task disappears.
-- The load harness (`examples/loadgen.rs`, `examples/refserver.rs`, `scripts/bench.sh`) speaks the new protocol and gains a `--topics` dimension with a topic-partitioned goal scenario.
+- The load harness is rebuilt, not patched. Every layer was designed around the global bus: `loadgen`'s expected deliveries (`sent × (connections − 1)`), its setup and frame format, `refserver`'s routing, every predicted value in `calibrate.sh`, and `bench.sh`'s scenarios and verdict.
+  - **New dimensions:** topics, binary publishing and membership churn.
+  - **New correctness meters:** `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement latency. Each one is proven by a new calibration case with a known answer.
+  - **New verdict:** `incorrect`, which overrides any result where routing was wrong.
+  - **New scenarios:** topic-partitioned scenarios, including `goal-1m-topics`.
 - Documentation is updated to match: `README.md`, `docs/architecture.md`, `docs/decisions.md`, `CLAUDE.md`, `openspec/config.yaml` and the `gateway-review` and `perf-check` skills.
 
 ## Capabilities

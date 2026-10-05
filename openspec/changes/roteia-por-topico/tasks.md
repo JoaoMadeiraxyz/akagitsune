@@ -30,9 +30,37 @@
 
 ## 5. Harness
 
-- [ ] 5.1 `examples/loadgen.rs`: add `--topics T`, split connections evenly (reject when `connections % T != 0`), assign senders round-robin, and subscribe and await `subscribed` before the clock starts. Publish with the new frames and parse the new envelope without building a `Value` on the timing path
-- [ ] 5.2 `examples/refserver.rs`: speak the new protocol with the same injected delay, loss and freeze. `scripts/calibrate.sh` must pass with the answers in `docs/architecture.md` unchanged
-- [ ] 5.3 `scripts/bench.sh`: add the `topics` column, use offered = `senders × rate × (connections / topics − 1)`, and add the `goal-1m-topics` scenario (`--connections 2100 --topics 100 --senders 100 --rate 500`)
+The harness can land before section 3, because it only needs `refserver`. See `design.md` decision 10.
+
+- [ ] 5.1 `examples/loadgen.rs`, topology:
+  - add `--topics T`, with connection `i` on `t-(i mod T)`, rejecting `connections % T != 0`;
+  - make each sender publish to its own topic;
+  - subscribe and await `subscribed` before the clock, counting `subscribe_failed`;
+  - compute expected deliveries per topic from the acknowledged members, replacing `sent × (established − 1)`
+- [ ] 5.2 `examples/loadgen.rs`, wire format:
+  - publish `{"type":"publish","topic":…,"data":{stamp}}`;
+  - add `--binary`, sending `[len][topic][stamp][padding]`;
+  - read the envelope's `topic` and the binary header on the receive path without building a `Value`
+- [ ] 5.3 `examples/loadgen.rs`, meters:
+  - add `misrouted`, `dropped` (the sum of every `warning.dropped`), `unaccounted` (whole-run expected − received − dropped), and `subscribe_ack_p50_ms` / `subscribe_ack_p99_ms`;
+  - add all of them to `--json`;
+  - extend `USAGE` to describe them
+- [ ] 5.4 `examples/loadgen.rs`, churn: add `--churn N`, with `N` extra connections alternating subscribe/unsubscribe on `t-0` once per second during the measured window, excluded from the expected deliveries
+- [ ] 5.5 `examples/loadgen.rs`: add unit tests for the expected-delivery arithmetic, including uneven acknowledgements and the `T = 1` reduction to the old formula (`cargo test --examples`)
+- [ ] 5.6 `examples/refserver.rs`:
+  - speak the new protocol, including acknowledgements and the binary header, keeping its single broadcast bus with a per-connection topic filter so it stays independent from the gateway's registry;
+  - add `--warn-drops` and `--ignore-topics`;
+  - keep delay, silent loss and freeze unchanged
+- [ ] 5.7 `scripts/calibrate.sh`: keep cases 1–4 at `T = 1` with their current predicted answers, and add cases 5–10 from `design.md` decision 10 (topics, the misrouting meter, silent loss, reported loss, binary, churn exclusion). Every predicted value must come from arithmetic
+- [ ] 5.8 `scripts/bench.sh`:
+  - change the scenario tuple to `name connections topics senders rate payload seconds [flags]`;
+  - add the `topics`, `binary`, `churn`, `subscribe_failed`, `subscribe_ack_p99_ms`, `misrouted`, `dropped` and `unaccounted` columns;
+  - change `offered()` to `senders × rate × (conns / topics − 1)`;
+  - add the `incorrect` verdict, which overrides every other verdict;
+  - compute RSS per connection over every open connection;
+  - print the full invocation in the markdown table
+- [ ] 5.9 `scripts/bench.sh`: add the `topics-1k`, `topics-5k`, `binary-200` and `churn-500` scenarios to the baseline sweep and `goal-1m-topics` to the goal set, with the invocations from `design.md` decision 10
+- [ ] 5.10 Run `scripts/calibrate.sh` and get every case green before section 3 is measured. If a case fails, fix the harness rather than widen a tolerance
 
 ## 6. Documentation
 
@@ -42,7 +70,16 @@
 - [ ] 6.4 `docs/decisions.md`: append entries 11–14 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
 - [ ] 6.5 `CLAUDE.md`: reword the payload hard rule (the control frame is parsed, `data` stays `&RawValue`) and the no-locks rule (shared state is the `AtomicUsize` and the lock-free registry), and add `src/registry.rs` to Layout
 - [ ] 6.6 `openspec/config.yaml`: update the service description (topic routing instead of a single global bus) and the code map
-- [ ] 6.7 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`
+- [ ] 6.7 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`. In `perf-check`, update *Reading the output* and *Methodology*:
+  - the delivery formula with topics;
+  - `warning` as a full subscriber queue;
+  - the `misrouted`, `dropped`, `unaccounted` and `subscribe_ack` meters;
+  - the `incorrect` verdict;
+  - the new scenarios
+- [ ] 6.8 `docs/architecture.md`, *Performance goal* and *Harness calibration*:
+  - generalize the definition of a delivery to `senders × rate × (connections / topics − 1)`;
+  - add `goal-1m-topics` to the goal table;
+  - add calibration cases 5–10 with their predicted and measured values
 
 ## 7. Verify
 
