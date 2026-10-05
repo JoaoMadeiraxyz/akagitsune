@@ -6,20 +6,28 @@ Defines how the gateway relays text and binary frames between connections withou
 ## Requirements
 
 ### Requirement: Text frames are relayed in an envelope
-The gateway SHALL relay every valid JSON text frame to every other connection as a text frame `{"type":"message","from":"<sender uuid>","data":<payload>}`, where `data` is the sender's JSON embedded without being deserialized.
+The gateway SHALL relay every valid JSON text frame to every other connection as a text frame `{"type":"message","from":"<sender uuid>","data":<payload>}`, where `data` is the sender's JSON value embedded byte for byte, without being deserialized. Whitespace before and after the value SHALL NOT be part of `data`; every byte from the first to the last byte of the value SHALL be kept, including interior whitespace, key order, escape sequences and number formatting.
 
 Fonte: `src/ws.rs:98` — `handle_socket`; `src/protocol.rs:9` — `ServerMessage`.
-Teste: `tests/gateway.rs:52` — `payload_is_relayed_verbatim_to_others`.
+Teste: `tests/gateway.rs:93` — `payload_is_relayed_verbatim_to_others`; `tests/gateway.rs:109` — `text_payload_bytes_are_relayed_verbatim`.
 
 #### Scenario: Object payload reaches another connection
 - **WHEN** connection A sends the text frame `{"hp":42,"pos":[1,2],"nested":{"any":null}}`
 - **THEN** connection B receives `{"type":"message","from":"<A's id>","data":{"hp":42,"pos":[1,2],"nested":{"any":null}}}`
 
+#### Scenario: Payload bytes are kept exactly
+- **WHEN** connection A sends the text frame `{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}`
+- **THEN** connection B receives exactly the text `{"type":"message","from":"<A's id>","data":{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}}`
+
+#### Scenario: Surrounding whitespace is dropped
+- **WHEN** connection A sends the text frame `  42  `
+- **THEN** connection B receives exactly the text `{"type":"message","from":"<A's id>","data":42}`
+
 ### Requirement: Any JSON value is accepted
 The gateway SHALL accept any JSON value as a text payload, including numbers, strings, arrays and `null`, and SHALL NOT require any field or shape.
 
 Fonte: `src/ws.rs:98` — `handle_socket`.
-Teste: `tests/gateway.rs:68` — `any_json_shape_is_accepted`.
+Teste: `tests/gateway.rs:129` — `any_json_shape_is_accepted`.
 
 #### Scenario: Non-object payloads are relayed
 - **WHEN** connection A sends `42`, `"texto"`, `[1,2,3]` and `null` as text frames
@@ -29,7 +37,7 @@ Teste: `tests/gateway.rs:68` — `any_json_shape_is_accepted`.
 A text frame that is not valid JSON SHALL NOT be relayed. The gateway SHALL send the sender `{"type":"error","message":"text frames must contain valid JSON; use binary frames otherwise"}` and SHALL keep the connection open.
 
 Fonte: `src/ws.rs:100` — `handle_socket`; `src/ws.rs:22` — `INVALID_PAYLOAD`; `src/protocol.rs:11` — `ServerMessage`.
-Teste: `tests/gateway.rs:133` — `invalid_json_is_rejected_without_broadcasting`.
+Teste: `tests/gateway.rs:194` — `invalid_json_is_rejected_without_broadcasting`.
 
 #### Scenario: Invalid text produces an error and no broadcast
 - **WHEN** connection A sends the text frame `not json at all`
@@ -44,7 +52,7 @@ Teste: `tests/gateway.rs:133` — `invalid_json_is_rejected_without_broadcasting
 The gateway SHALL relay every binary frame to every other connection as a binary frame with identical bytes and no envelope.
 
 Fonte: `src/ws.rs:109` — `handle_socket`.
-Teste: `tests/gateway.rs:80` — `binary_frames_pass_through_untouched`.
+Teste: `tests/gateway.rs:141` — `binary_frames_pass_through_untouched`.
 
 #### Scenario: Binary bytes arrive unchanged
 - **WHEN** connection A sends a binary frame with bytes `00 ff 10 42`
@@ -54,7 +62,7 @@ Teste: `tests/gateway.rs:80` — `binary_frames_pass_through_untouched`.
 The gateway SHALL NOT deliver a relayed text or binary frame back to the connection that sent it.
 
 Fonte: `src/ws.rs:80` — `handle_socket`.
-Teste: `tests/gateway.rs:52` — `payload_is_relayed_verbatim_to_others`; `tests/gateway.rs:80` — `binary_frames_pass_through_untouched`.
+Teste: `tests/gateway.rs:93` — `payload_is_relayed_verbatim_to_others`; `tests/gateway.rs:141` — `binary_frames_pass_through_untouched`.
 
 #### Scenario: No echo for text
 - **WHEN** connection A sends a valid JSON text frame
@@ -68,7 +76,7 @@ Teste: `tests/gateway.rs:52` — `payload_is_relayed_verbatim_to_others`; `tests
 For a single sender, every other connection SHALL receive that sender's relayed frames in the order they were sent, as long as the receiver is not lagging.
 
 Fonte: `src/ws.rs:96` — `handle_socket`; `src/ws.rs:61` — `handle_socket`.
-Teste: `tests/gateway.rs:93` — `fifo_order_holds_across_a_multi_batch_burst`.
+Teste: `tests/gateway.rs:154` — `fifo_order_holds_across_a_multi_batch_burst`.
 
 #### Scenario: Burst preserves order
 - **WHEN** connection A sends 200 text frames `{"seq":0}` through `{"seq":199}` back to back
