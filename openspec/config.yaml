@@ -1,0 +1,93 @@
+schema: spec-driven
+
+context: |
+  Service: realtime-gateway (crate `realtime_gateway`, repository branded Akagitsune).
+  A generic WebSocket relay. It accepts connections on `GET /ws`, assigns each
+  one a UUID, and relays every frame to every other connection on a single
+  global `tokio::sync::broadcast` bus. It never interprets the payload.
+
+  Boundaries: no upstream or downstream service. Clients are arbitrary
+  WebSocket peers; there is no auth, no storage, no backplane. Config is only
+  `GATEWAY_ADDR` (default 127.0.0.1:3000) and `RUST_LOG`.
+
+  Runtime and build: Rust edition 2024, Cargo (no workspace, no
+  rust-toolchain file; CI uses stable). Dependencies: axum 0.8 (ws), tokio,
+  serde/serde_json with `raw_value`, uuid, tracing. Dev: tokio-tungstenite.
+
+  Code map:
+    src/protocol.rs  ServerMessage: welcome, message, warning, error frames
+    src/state.rs     AppState, BroadcastMessage, BROADCAST_CAPACITY
+    src/ws.rs        handle_socket: reader, bridge and writer tasks
+    src/lib.rs       app() router and run()
+    src/main.rs      config, logging, ctrl-c shutdown
+    tests/gateway.rs end-to-end tests against a real listener
+    examples/loadgen.rs, examples/refserver.rs, scripts/bench.sh  perf harness
+
+  Authoritative docs, read before proposing:
+    CLAUDE.md             hard rules (no payload deserialization, no domain
+                          vocabulary, no code comments, serialize once,
+                          no locks on the hot path)
+    docs/scope.md         the scope test and the borderline cases
+    docs/architecture.md  lifecycle and hot-path invariants
+    docs/decisions.md     numbered design decisions
+
+  Verification, as measured in .github/workflows/ci.yml:
+    One job, on push to main and on every pull_request:
+    `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
+    `main` has no branch protection and no rulesets, so a red CI does not
+    block a merge; the reviewer must check the run before merging.
+    Benchmarks (`scripts/bench.sh`) never run in CI; they are manual and local.
+
+rules:
+  proposal:
+    - >-
+      Apply the scope test from docs/scope.md and state the verdict (in, out,
+      borderline). The project already drifted into a chat server once because
+      nobody wrote this down.
+    - >-
+      If the change is listed under "Borderline cases" in docs/scope.md, the
+      proposal must include the new entry for docs/decisions.md
+      (context, decision, consequence). Do not proceed on an implicit decision.
+    - >-
+      Never introduce domain vocabulary (username, room name, chat,
+      notification, player) in requirement names, frame fields or error
+      messages. Identity is the connection UUID.
+  specs:
+    - >-
+      Scenarios describe wire behavior a WebSocket client observes (frames
+      sent and received, close), so each one maps to a test in
+      tests/gateway.rs. Internal task structure is not a requirement.
+    - >-
+      Every requirement carries a `Fonte:` line in the `path:line` — `Symbol`
+      format, full path from the repo root (e.g. `src/ws.rs:37` —
+      `handle_socket`). Rust free functions are snake_case, so the path is
+      required for the tooling to resolve the symbol.
+  design:
+    - >-
+      Check the change against every hot-path invariant in
+      docs/architecture.md and say which ones it touches. Breaking one is a
+      regression even when tests pass.
+    - >-
+      Any new state must stay bounded and lock-free on the hot path; if it
+      cannot, that is a borderline case and needs a decision entry.
+  tasks:
+    - >-
+      Every protocol behavior gets an integration test in tests/gateway.rs,
+      written from the spec scenario.
+    - >-
+      Verification task must say who runs what: CI runs fmt, clippy
+      --all-targets -D warnings and cargo test on the PR, but nothing blocks
+      a merge on red, so the reviewer confirms the run is green.
+    - >-
+      Changes to src/ws.rs reader/bridge/writer, src/state.rs or bus
+      capacities include a manual `scripts/bench.sh --goal` run with the
+      numbers in the PR. CI does not measure performance.
+
+operations:
+  apply:
+    guidance:
+      - No comments in code, not even doc comments; rationale goes to docs/decisions.md or the commit message.
+      - Text frames are validated with `serde_json::from_str::<&RawValue>` only; never `Value`, typed structs or field lookups.
+  archive:
+    guidance:
+      - If the change added a decision, confirm docs/decisions.md was updated in the implementation PR.
