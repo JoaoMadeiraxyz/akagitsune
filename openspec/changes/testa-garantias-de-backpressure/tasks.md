@@ -7,7 +7,7 @@
 
 ## 2. Spec
 
-- [ ] 2.1 Replace both requirements' `Teste:` lines in the delta with the tests and their `tests/gateway.rs:<line>`
+- [x] 2.1 Replace both requirements' `Teste:` lines in the delta with the tests and their `tests/gateway.rs:<line>`
 
 ## 3. Verify
 
