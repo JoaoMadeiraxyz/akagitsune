@@ -24,6 +24,13 @@ async fn next_msg(client: &mut Client) -> WsMessage {
         .unwrap()
 }
 
+async fn send(client: &mut Client, msg: WsMessage) {
+    tokio::time::timeout(Duration::from_secs(5), client.send(msg))
+        .await
+        .expect("timed out sending a frame")
+        .unwrap()
+}
+
 async fn next_json(client: &mut Client) -> Value {
     serde_json::from_str(&next_msg(client).await.into_text().unwrap()).unwrap()
 }

@@ -2,7 +2,7 @@
 
 ## 1. Helper
 
-- [ ] 1.1 Add the `send` helper to `tests/gateway.rs` as described in design.md
+- [x] 1.1 Add the `send` helper to `tests/gateway.rs` as described in design.md
 
 ## 2. Call sites
 
