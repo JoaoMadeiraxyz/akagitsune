@@ -233,6 +233,56 @@ async fn delivery_resumes_after_a_warning() {
 }
 
 #[tokio::test]
+async fn dropped_count_matches_the_frames_skipped() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    let total: u64 = 128_000;
+    for i in 0..total {
+        send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
+    }
+    send(
+        &mut a,
+        WsMessage::text(json!({ "marker": "end" }).to_string()),
+    )
+    .await;
+
+    let mut warnings = 0;
+    let mut received: u64 = 0;
+    let mut dropped_total: u64 = 0;
+    let mut dropped_since_last: u64 = 0;
+    let mut expected_next: u64 = 0;
+    loop {
+        let msg = next_json(&mut b).await;
+        if msg["type"] == "warning" {
+            let dropped = msg["dropped"].as_u64().unwrap();
+            dropped_since_last += dropped;
+            dropped_total += dropped;
+            warnings += 1;
+            continue;
+        }
+        received += 1;
+        if msg["data"] == json!({ "marker": "end" }) {
+            break;
+        }
+        let seq = msg["data"]["seq"].as_u64().unwrap();
+        assert_eq!(
+            seq,
+            expected_next + dropped_since_last,
+            "seq {seq} after {dropped_since_last} reported dropped"
+        );
+        expected_next = seq + 1;
+        dropped_since_last = 0;
+    }
+    assert!(
+        warnings > 0,
+        "receiver never lagged, so the count was not exercised"
+    );
+    assert_eq!(received + dropped_total, total + 1);
+}
+
+#[tokio::test]
 async fn slow_receiver_does_not_hold_back_others() {
     let url = spawn_server().await;
     let (mut a, _) = connect(&url).await;

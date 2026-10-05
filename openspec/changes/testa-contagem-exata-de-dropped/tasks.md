@@ -2,7 +2,7 @@
 
 ## 1. Test
 
-- [ ] 1.1 Add `dropped_count_matches_the_frames_skipped` to `tests/gateway.rs`, asserting the gap form and the balance form described in design.md, and requiring at least one warning
+- [x] 1.1 Add `dropped_count_matches_the_frames_skipped` to `tests/gateway.rs`, asserting the gap form and the balance form described in design.md, and requiring at least one warning
 
 ## 2. Spec
 
