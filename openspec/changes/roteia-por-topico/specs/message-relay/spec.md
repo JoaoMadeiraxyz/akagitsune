@@ -35,7 +35,7 @@ Teste: planned — `tests/gateway.rs` — `any_json_shape_is_accepted`.
 - **THEN** B receives each one as the `data` of a `message` envelope
 
 ### Requirement: Invalid JSON text is rejected to the sender only
-A text frame that is not valid JSON, or that is not a `subscribe`, `unsubscribe` or `publish` frame with the required fields, SHALL NOT be delivered to anyone. The gateway SHALL send the sender `{"type":"error","message":"<INVALID_FRAME>"}` and SHALL keep the connection open. Fields other than `type`, `topic` and `data` SHALL be ignored.
+A text frame that is not valid JSON, or that is not a `subscribe`, `unsubscribe` or `publish` frame with the required fields, SHALL NOT be delivered to anyone. The gateway SHALL send the sender `{"type":"error","topic":<topic or null>,"message":"<INVALID_FRAME>"}`, with `topic` as defined in `topic-routing`, and SHALL keep the connection open. Fields other than `type`, `topic` and `data` SHALL be ignored.
 
 Fonte: planned — `src/ws.rs` — `INVALID_FRAME`; `src/protocol.rs` — `ClientFrame`.
 Teste: planned — `tests/gateway.rs` — `invalid_json_is_rejected_without_broadcasting`; `tests/gateway.rs` — `unrecognized_frame_is_rejected`.
@@ -43,18 +43,18 @@ Teste: planned — `tests/gateway.rs` — `invalid_json_is_rejected_without_broa
 #### Scenario: Invalid text produces an error and no broadcast
 - **WHEN** connection B is subscribed to `k`
 - **AND** connection A sends the text frame `not json at all`
-- **THEN** A receives a frame with `"type":"error"`
+- **THEN** A receives a frame with `"type":"error"` and `"topic":null`
 - **AND** B receives nothing
 
 #### Scenario: Bare JSON is not a publish
 - **WHEN** connection B is subscribed to `k`
 - **AND** connection A sends the text frame `{"hp":42}`
-- **THEN** A receives a frame with `"type":"error"`
+- **THEN** A receives a frame with `"type":"error"` and `"topic":null`
 - **AND** B receives nothing
 
 #### Scenario: Publish without data is rejected
 - **WHEN** connection A sends `{"type":"publish","topic":"k"}`
-- **THEN** A receives a frame with `"type":"error"`
+- **THEN** A receives a frame with `"type":"error"` and `"topic":"k"`
 
 #### Scenario: Connection keeps working after an error
 - **WHEN** connection A, after receiving an `error` frame, publishes a valid frame to `k`
@@ -115,16 +115,16 @@ Teste: planned — `tests/gateway.rs` — `binary_frames_carry_topic_and_sender`
 - **THEN** B receives both, in that order
 
 ### Requirement: Malformed binary frames are rejected to the sender only
-A binary frame whose length byte is 0, that is shorter than `1 + len` bytes, or whose topic bytes are not UTF-8 SHALL NOT be delivered. The gateway SHALL send the sender `{"type":"error","message":"<INVALID_BINARY>"}` as a text frame and SHALL keep the connection open.
+A binary frame whose length byte is 0, that is shorter than `1 + len` bytes, or whose topic bytes are not UTF-8 SHALL NOT be delivered. The gateway SHALL send the sender `{"type":"error","topic":<topic or null>,"message":"<INVALID_BINARY>"}` as a text frame, with `topic` as defined in `topic-routing` (`""` for a zero length byte, `null` when the topic bytes cannot be read), and SHALL keep the connection open.
 
 Fonte: planned — `src/protocol.rs` — `BinaryHeader`; `src/ws.rs` — `INVALID_BINARY`.
 Teste: planned — `tests/gateway.rs` — `malformed_binary_is_rejected`.
 
 #### Scenario: Truncated header is rejected
 - **WHEN** connection A sends a binary frame with bytes `05 6b`
-- **THEN** A receives a text frame with `"type":"error"`
+- **THEN** A receives a text frame with `"type":"error"` and `"topic":null`
 - **AND** no connection receives anything for it
 
 #### Scenario: Zero-length topic is rejected
 - **WHEN** connection A sends a binary frame with bytes `00 ff`
-- **THEN** A receives a text frame with `"type":"error"`
+- **THEN** A receives a text frame with `"type":"error"` and `"topic":""`

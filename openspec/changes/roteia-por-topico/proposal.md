@@ -35,6 +35,7 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
   - Topics have no owner, no namespace and no access control. Two applications that choose the same key share it.
   - This is how ephemeral real-time pub/sub works in Redis, NATS, MQTT, Socket.IO and similar systems. The gap compared with them is subscription authorization.
 - Publishing does not require a subscription. Senders never receive their own frames, even when subscribed.
+- **BREAKING** Every `error` frame names the topic it concerns: `{"type":"error","topic":<topic or null>,"message":…}`. `topic` is `null` only when the failing frame had no readable topic.
 - New limits, each answered with an `error` frame while the connection stays open:
   - topics of 1 to 255 bytes of UTF-8;
   - at most 64 subscriptions per connection.

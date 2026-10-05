@@ -119,7 +119,7 @@ Teste: planned — `tests/gateway.rs` — `any_connection_can_join_any_topic`.
 - **THEN** C still receives the `message` frame
 
 ### Requirement: Topics are 1 to 255 bytes of UTF-8
-The gateway SHALL accept as a topic any string of 1 to 255 bytes of UTF-8, measured after JSON unescaping, and SHALL compare topics byte for byte. A `subscribe`, `unsubscribe` or `publish` whose topic is empty or longer than 255 bytes SHALL be answered with `{"type":"error","message":"<INVALID_TOPIC>"}`, SHALL have no other effect, and SHALL leave the connection open.
+The gateway SHALL accept as a topic any string of 1 to 255 bytes of UTF-8, measured after JSON unescaping, and SHALL compare topics byte for byte. A `subscribe`, `unsubscribe` or `publish` whose topic is empty or longer than 255 bytes SHALL be answered with `{"type":"error","topic":"<the topic as sent>","message":"<INVALID_TOPIC>"}`, SHALL have no other effect, and SHALL leave the connection open.
 
 Fonte: planned — `src/protocol.rs` — `MAX_TOPIC_LEN`; `src/ws.rs` — `INVALID_TOPIC`.
 Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.rs` — `topics_compare_byte_for_byte`.
@@ -130,7 +130,7 @@ Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.
 
 #### Scenario: Empty or oversized topic is rejected
 - **WHEN** a connection sends `subscribe` with topic `""`, then with a topic of 256 bytes
-- **THEN** it receives an `error` frame for each
+- **THEN** it receives an `error` frame with `"topic":""` for the first and with the 256-byte topic for the second
 - **AND** a later valid frame from it is still processed
 
 #### Scenario: Escaped and literal forms are the same topic
@@ -139,14 +139,45 @@ Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.
 - **THEN** B receives the `message` frame
 
 ### Requirement: A connection holds at most 64 subscriptions
-A connection SHALL be able to hold up to 64 distinct topic subscriptions. A `subscribe` to a new topic beyond that SHALL be answered with `{"type":"error","message":"<SUBSCRIPTION_LIMIT>"}` and SHALL NOT change the connection's subscriptions.
+A connection SHALL be able to hold up to 64 distinct topic subscriptions. A `subscribe` to a new topic beyond that SHALL be answered with `{"type":"error","topic":"<that topic>","message":"<SUBSCRIPTION_LIMIT>"}` and SHALL NOT change the connection's subscriptions.
 
 Fonte: planned — `src/registry.rs` — `MAX_SUBSCRIPTIONS_PER_CONNECTION`; `src/ws.rs` — `SUBSCRIPTION_LIMIT`.
 Teste: planned — `tests/gateway.rs` — `subscription_limit_is_enforced`.
 
 #### Scenario: Sixty-fifth topic is rejected
 - **WHEN** a connection subscribes to 64 distinct topics and receives 64 acknowledgements
-- **AND** it subscribes to a 65th topic
-- **THEN** it receives an `error` frame
+- **AND** it subscribes to a 65th topic `t65`
+- **THEN** it receives an `error` frame with `"topic":"t65"`
 - **AND** a publish by another connection to the 65th topic does not reach it
 - **AND** after unsubscribing from one topic, subscribing to the 65th is acknowledged
+
+### Requirement: Every error frame names the topic it concerns
+Every `error` frame SHALL have the shape `{"type":"error","topic":<topic or null>,"message":"<text>"}`, with the `topic` field always present. When the frame that caused the error was parsed as a control frame (whatever its `type`), or was a binary frame whose length byte and topic bytes could be read, `topic` SHALL be the topic exactly as the client sent it, after JSON unescaping, even when that topic is itself invalid. When no topic could be read, because the frame was not JSON, had no string `topic` field, or was a binary frame too short for its declared topic or with a topic that is not UTF-8, `topic` SHALL be `null`.
+
+Fonte: planned — `src/protocol.rs` — `ServerMessage`; `src/ws.rs` — `handle_socket`.
+Teste: planned — `tests/gateway.rs` — `errors_name_the_topic`; `tests/gateway.rs` — `errors_without_a_readable_topic_are_null`.
+
+#### Scenario: Several subscribes, one rejected
+- **WHEN** a connection holding 63 subscriptions sends `subscribe` for `a` and then for `b` without waiting
+- **THEN** it receives `{"type":"subscribed","topic":"a"}`
+- **AND** an `error` frame with `"topic":"b"`
+
+#### Scenario: Publish without data names its topic
+- **WHEN** a connection sends `{"type":"publish","topic":"k"}`
+- **THEN** it receives an `error` frame with `"topic":"k"`
+
+#### Scenario: Unknown type names its topic
+- **WHEN** a connection sends `{"type":"join","topic":"k"}`
+- **THEN** it receives an `error` frame with `"topic":"k"`
+
+#### Scenario: No readable topic gives null
+- **WHEN** a connection sends the text frame `not json at all`, then `{"hp":42}`, then `{"type":"subscribe","topic":5}`
+- **THEN** it receives three `error` frames, each with `"topic":null`
+
+#### Scenario: Zero-length binary topic gives an empty topic
+- **WHEN** a connection sends a binary frame with bytes `00 ff`
+- **THEN** it receives an `error` frame with `"topic":""`
+
+#### Scenario: Truncated binary header gives null
+- **WHEN** a connection sends a binary frame with bytes `05 6b`
+- **THEN** it receives an `error` frame with `"topic":null`

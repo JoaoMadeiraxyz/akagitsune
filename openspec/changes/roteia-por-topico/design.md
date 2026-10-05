@@ -174,6 +174,10 @@ Other rules:
 - The envelope is `{"type":"message","topic":…,"from":…,"data":…}`. `topic` is re-serialized with standard JSON escaping. `data` is spliced.
 - Unknown extra fields are ignored, for forward compatibility.
 
+Error frames always name the topic they concern, as `{"type":"error","topic":<topic or null>,"message":…}`. The field is always present, so a client can match each error to the request that caused it even with several `subscribe`s in flight. MQTT does the same with a reason code per topic filter in `SUBACK`.
+- If the frame parsed as a `ClientFrame`, `topic` is the topic as sent after unescaping, even if it is the invalid topic being rejected (empty, or over 255 bytes; the 64 KiB frame limit bounds the echo). That covers publish without `data`, an unknown `type`, an invalid topic and the subscription limit.
+- If no topic can be read, `topic` is `null`: the frame is not JSON, has no string `topic`, or fails to parse for another reason. The gateway does not try to salvage a topic from a frame it could not parse.
+
 Topic rules, identical for text and binary:
 
 - 1 to 255 bytes of UTF-8 after JSON unescaping, compared byte for byte.
@@ -189,7 +193,7 @@ Subscription rules:
 - **Inbound:** `[len: u8][topic: len bytes, UTF-8][payload: rest]`.
 - **Delivered:** `[len: u8][topic][sender uuid: 16 bytes, RFC 4122 byte order][payload]`.
 
-A `len` of 0, a frame shorter than `1 + len`, or a topic that is not UTF-8 produces `INVALID_BINARY` as a text `error` frame, and the connection stays open. The payload may be empty. The 64 KiB frame limit applies to the inbound frame including its header. A delivered frame is at most 16 bytes larger.
+A `len` of 0, a frame shorter than `1 + len`, or a topic that is not UTF-8 produces `INVALID_BINARY` as a text `error` frame, and the connection stays open. Its `topic` is `""` for a zero length byte and `null` when the topic bytes cannot be read (truncated or not UTF-8). The payload may be empty. The 64 KiB frame limit applies to the inbound frame including its header. A delivered frame is at most 16 bytes larger.
 
 ### 7. Ordering and visibility guarantees
 
@@ -355,7 +359,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 **Context.** One global bus made fanout O(N²) and made targeted delivery impossible (entry 8). Topics need the client to say what it wants, which entry 4 had ruled out by having no client-to-server protocol.
 
-**Decision.** Clients send `subscribe`, `unsubscribe` and `publish` control frames. A publish reaches only the other subscribers of its topic, as `{"type":"message","topic":…,"from":…,"data":…}`. The gateway parses its own control frame and still never deserializes `data`. A topic is an opaque key of 1–255 bytes of UTF-8, compared byte for byte. It exists only while it has subscribers: the first `subscribe` creates it, removing the last subscriber deletes it, a `publish` never creates it, and nothing is retained across an empty period. Topics have no owner, no namespace and no access control. The global bus is removed: "everyone" is a topic everyone subscribes to. Supersedes entries 4 and 8.
+**Decision.** Clients send `subscribe`, `unsubscribe` and `publish` control frames. A publish reaches only the other subscribers of its topic, as `{"type":"message","topic":…,"from":…,"data":…}`. The gateway parses its own control frame and still never deserializes `data`. A topic is an opaque key of 1–255 bytes of UTF-8, compared byte for byte. Every `error` frame carries a `topic` field naming the topic of the frame that failed, or `null` when none could be read. A topic exists only while it has subscribers: the first `subscribe` creates it, removing the last subscriber deletes it, a `publish` never creates it, and nothing is retained across an empty period. Topics have no owner, no namespace and no access control. The global bus is removed: "everyone" is a topic everyone subscribes to. Supersedes entries 4 and 8.
 
 **Consequence.** Breaking change for every client. Fanout is bounded by topic size. The gateway now has a client protocol to version and test. Anything a client wants beyond routing still goes inside `data`. Applications sharing a gateway must avoid key collisions themselves, and any connection can read any topic until subscription authorization is added, which is the expected next step.
 
