@@ -2,7 +2,7 @@
 
 ## 1. Test
 
-- [ ] 1.1 In `slow_consumer_receives_a_warning_frame`, send `128_000` frames instead of `BROADCAST_CAPACITY * 500`; `rg BROADCAST_CAPACITY tests` must return nothing
+- [x] 1.1 In `slow_consumer_receives_a_warning_frame`, send `128_000` frames instead of `BROADCAST_CAPACITY * 500`; `rg BROADCAST_CAPACITY tests` must return nothing
 
 ## 2. Verify
 

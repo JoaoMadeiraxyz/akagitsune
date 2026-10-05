@@ -177,8 +177,7 @@ async fn slow_consumer_receives_a_warning_frame() {
     let (mut a, _) = connect(&url).await;
     let (mut b, _) = connect(&url).await;
 
-    let overflow = realtime_gateway::state::BROADCAST_CAPACITY * 500;
-    for i in 0..overflow {
+    for i in 0..128_000 {
         send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
     }
 
