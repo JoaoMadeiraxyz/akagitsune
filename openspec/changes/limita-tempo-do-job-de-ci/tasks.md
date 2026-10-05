@@ -2,7 +2,7 @@
 
 ## 1. CI
 
-- [ ] 1.1 Add `timeout-minutes: 10` to the `check` job in `.github/workflows/ci.yml`, at job level next to `runs-on`
+- [x] 1.1 Add `timeout-minutes: 10` to the `check` job in `.github/workflows/ci.yml`, at job level next to `runs-on`
 
 ## 2. Context
 
