@@ -1,0 +1,51 @@
+# Tasks
+
+## 1. Protocol
+
+- [ ] 1.1 Add `ClientFrame` (`subscribe`, `unsubscribe`, `publish` with `data: &RawValue`) to `src/protocol.rs`, with `topic` as `Cow<str>` and unknown fields ignored
+- [ ] 1.2 Add `Subscribed { topic }`, `Unsubscribed { topic }` and `topic` on `Message` to `ServerMessage`, keeping the field order `type, topic, from, data`
+- [ ] 1.3 Add the binary header: parse `[len][topic][payload]`, and build `[len][topic][uuid][payload]` once into a `Bytes`
+- [ ] 1.4 Add `MAX_TOPIC_LEN = 255` and the `INVALID_FRAME`, `INVALID_TOPIC`, `INVALID_BINARY` and `SUBSCRIPTION_LIMIT` messages, with no domain vocabulary
+
+## 2. Registry
+
+- [ ] 2.1 Add the `papaya` dependency. Confirm it can update an entry atomically and remove it when it empties. If it cannot, stop and revise `design.md` decision 2 before going on
+- [ ] 2.2 Create `src/registry.rs` with `Subscriber { id, queue, dropped }`, `TopicRegistry` (topic → `Arc<[Subscriber]>`, copy-on-write subscribe/unsubscribe, remove on empty) and a lock-free fanout function using `try_reserve` and `dropped.swap` as in `design.md` decision 4
+- [ ] 2.3 Add `Subscriptions`: at most `MAX_SUBSCRIPTIONS_PER_CONNECTION = 64` topics per connection, with a `Drop` that unsubscribes from all of them
+- [ ] 2.4 Replace the bus in `src/state.rs`: `AppState` holds the registry and the `AtomicUsize`. Remove `BroadcastMessage` and `BROADCAST_CAPACITY`
+
+## 3. Connection
+
+- [ ] 3.1 In `src/ws.rs`, remove the bridge task and leave two tasks (reader, writer) under the same `select!` teardown
+- [ ] 3.2 Reader: dispatch `ClientFrame` and binary frames. Insert into the registry before queueing `subscribed`. Fan out publishes, skipping the connection's own id
+- [ ] 3.3 Writer: the queue carries `Outbound { dropped_before, frame }` with capacity `SUBSCRIBER_QUEUE_CAPACITY = 256`. Emit `warning` before any frame whose `dropped_before > 0`. Keep batched flushes
+- [ ] 3.4 Keep the lag total in the disconnect log line, with no per-message logging
+
+## 4. Tests
+
+- [ ] 4.1 Rewrite every existing test in `tests/gateway.rs` that relied on the global bus so it subscribes first and publishes with the new frames, following the MODIFIED scenarios in the deltas
+- [ ] 4.2 Add one test per new scenario in `specs/topic-routing/spec.md` and the ADDED requirements in `specs/message-relay/spec.md`
+- [ ] 4.3 Add a concurrency test: several connections subscribing and unsubscribing in a loop while one publishes to the same topic. A steadily subscribed receiver gets every frame in order, and the gateway stays responsive
+- [ ] 4.4 Replace every `planned` `Fonte:` and `Teste:` line in the deltas with `path:line` — `Symbol` references to the implemented code and tests
+
+## 5. Harness
+
+- [ ] 5.1 `examples/loadgen.rs`: add `--topics T`, split connections evenly (reject when `connections % T != 0`), assign senders round-robin, and subscribe and await `subscribed` before the clock starts. Publish with the new frames and parse the new envelope without building a `Value` on the timing path
+- [ ] 5.2 `examples/refserver.rs`: speak the new protocol with the same injected delay, loss and freeze. `scripts/calibrate.sh` must pass with the answers in `docs/architecture.md` unchanged
+- [ ] 5.3 `scripts/bench.sh`: add the `topics` column, use offered = `senders × rate × (connections / topics − 1)`, and add the `goal-1m-topics` scenario (`--connections 2100 --topics 100 --senders 100 --rate 500`)
+
+## 6. Documentation
+
+- [ ] 6.1 `README.md`: rewrite the Protocol section (subscribe, unsubscribe, publish, envelope with `topic`, binary header in and out, limits, the unsubscribe window). Update Layout with `src/registry.rs`, change "three tasks" to two, and remove topic routing from "Not implemented yet"
+- [ ] 6.2 `docs/architecture.md`: update the lifecycle, the task table, the message flow diagram, hot-path invariants (payload rule wording, shared state now includes the lock-free registry), backpressure (queue instead of `Lagged`), the scalability table (fanout O(topic size), membership churn cost, single-task fanout per publish) and "What would have to change"
+- [ ] 6.3 `docs/decisions.md`: append entries 11–14 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
+- [ ] 6.4 `CLAUDE.md`: reword the payload hard rule (the control frame is parsed, `data` stays `&RawValue`) and the no-locks rule (shared state is the `AtomicUsize` and the lock-free registry), and add `src/registry.rs` to Layout
+- [ ] 6.5 `openspec/config.yaml`: update the service description (topic routing instead of a single global bus) and the code map
+- [ ] 6.6 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`
+
+## 7. Verify
+
+- [ ] 7.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `openspec validate --all --strict` locally before opening the PR
+- [ ] 7.2 Author runs `scripts/calibrate.sh` and then `scripts/bench.sh --goal` locally, and puts the table in the PR: `goal-1m-*` rows at `topics = 1` compared with the last baseline, plus `goal-1m-topics`. CI does not measure performance
+- [ ] 7.3 CI runs fmt, clippy and `cargo test` on the PR. `main` has no branch protection, so the reviewer confirms the run is green before merging
+- [ ] 7.4 An independent session fills `verificacao.md`: each requirement against its code and test with `path:line` evidence, each hot-path invariant from `design.md` decision 9 checked in the diff, and a grep of the diff for domain vocabulary and code comments
