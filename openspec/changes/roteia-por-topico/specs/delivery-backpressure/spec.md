@@ -3,9 +3,9 @@
 ## MODIFIED Requirements
 
 ### Requirement: Lagging connections are warned of dropped frames
-Each connection SHALL have an outgoing queue of 256 frames. When a frame is to be delivered to a connection whose queue is full, the gateway SHALL discard that frame for that connection only. Before the next frame it delivers to that connection, the gateway SHALL send `{"type":"warning","dropped":<n>}`, where `n` is greater than zero and equal to the number of frames discarded for it since the previous delivered frame. Delivery SHALL then continue with that next frame.
+Each connection SHALL hold at most 256 frames pending delivery. When a frame is to be delivered to a connection that already holds 256, the gateway SHALL discard that connection's oldest pending frame, for that connection only. When the connection is next served after one or more discards, the gateway SHALL send it `{"type":"warning","dropped":<n>}` before any further frame, where `n` is greater than zero and equal to the number of frames discarded for it since the previous frame it was sent, and SHALL then continue with the oldest frame still pending. Frames a connection published itself SHALL NOT be counted in `n`.
 
-Fonte: planned — `src/registry.rs` — `Subscriber`; `src/ws.rs` — `SUBSCRIBER_QUEUE_CAPACITY`; `src/protocol.rs` — `ServerMessage`.
+Fonte: planned — `src/registry.rs` — `Subscriber`; `src/ws.rs` — `INBOX_CAPACITY`; `src/ws.rs` — `handle_socket`; `src/protocol.rs` — `ServerMessage`.
 Teste: planned — `tests/gateway.rs` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs` — `delivery_resumes_after_a_warning`; `tests/gateway.rs` — `dropped_count_matches_the_frames_skipped`.
 
 #### Scenario: Slow consumer receives a warning

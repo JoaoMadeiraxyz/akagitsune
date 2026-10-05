@@ -37,7 +37,7 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
 - New limits, each answered with an `error` frame while the connection stays open:
   - topics of 1 to 255 bytes of UTF-8;
   - at most 64 subscriptions per connection.
-- Backpressure moves from the bus to each connection's outgoing queue of 256 frames. A full queue drops the frame for that receiver only, and the receiver is told with the same `{"type":"warning","dropped":n}` frame, placed exactly where the gap is.
+- Backpressure keeps today's policy, dropping the oldest frames, with a per-connection mechanism instead of the global bus. Each connection gets a 256-slot `broadcast` inbox with one receiver. A slow receiver loses its oldest frames, gets the same `{"type":"warning","dropped":n}` frame exactly at the gap, and still receives the newest ones. Control replies use a separate channel and are never dropped.
 - Each connection runs two tasks (reader, writer) instead of three. The bridge task disappears.
 - The benchmark harness switches to the topic protocol. The rebuild itself (per-topic expectations, correctness meters, topic scenarios, `goal-1m-topics`) is the separate change `prepara-harness-para-topicos`, which lands first and keeps a temporary `legacy` protocol. This change makes `topics` the default and deletes `legacy`.
 - Documentation is updated to match: `README.md`, `docs/architecture.md`, `docs/decisions.md`, `CLAUDE.md`, `openspec/config.yaml` and the `gateway-review` and `perf-check` skills.
@@ -52,7 +52,7 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
 
 - `message-relay`: text and binary relay now go to subscribers of a topic, text deliveries carry `topic`, binary frames carry a topic header, and unrecognized text frames are rejected.
 - `connection-lifecycle`: scenarios that relied on the global bus now subscribe and publish. The frame size limit applies to the whole control frame.
-- `delivery-backpressure`: lag is measured against the receiver's outgoing queue instead of the bus.
+- `delivery-backpressure`: lag is measured against each connection's own inbox instead of the shared bus. The drop-oldest policy and the `warning` frame are unchanged.
 
 ## Impact
 

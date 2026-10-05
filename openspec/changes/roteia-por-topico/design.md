@@ -43,16 +43,16 @@ Answering one in isolation constrains the others, so the design below follows a 
 The registry maps topic → list of subscriber handles. A handle is everything needed to deliver to one connection:
 
 ```
-Subscriber { id: Uuid, queue: mpsc::Sender<Outbound>, dropped: Arc<AtomicU64> }
+Subscriber { id: Uuid, inbox: broadcast::Sender<Message> }
 ```
 
-There is one `queue` and one `dropped` counter per connection, shared by every topic that connection subscribes to.
+There is one inbox per connection: a 256-slot `broadcast` channel whose only receiver is that connection's writer. It is shared by every topic the connection subscribes to (decision 4 explains why this is a `broadcast` and not an `mpsc`).
 
-The publisher looks up the topic and delivers straight into each subscriber's queue:
+The publisher looks up the topic and delivers straight into each subscriber's inbox:
 
 ```
-reader(A) ── publish k ──► registry[k] ──► [B, C] ── try_send ──► writer(B) ──► B
-                                                                  writer(C) ──► C
+reader(A) ── publish k ──► registry[k] ──► [B, C] ── inbox.send ──► writer(B) ──► B
+                                                                    writer(C) ──► C
 ```
 
 Why this shape:
@@ -69,7 +69,7 @@ Why this shape:
 ### 2. Lock-free reads, copy-on-write membership
 
 - The map is a lock-free concurrent hash map: `papaya`. The value for a topic is an immutable `Arc<[Subscriber]>`.
-- **Publish:** pins the map, reads the entry and iterates the slice. It takes no lock, holds nothing across `.await`, and calls only synchronous `try_send`.
+- **Publish:** pins the map, reads the entry and iterates the slice. It takes no lock in the gateway's own code, holds nothing across `.await`, and calls only the synchronous `broadcast::Sender::send` on each inbox. That call takes tokio's internal locks (decision 4).
 - **Subscribe / unsubscribe:** an atomic compute on the entry builds a new slice with the handle added or removed. Unsubscribing the last handle removes the entry in the same compute, so an empty topic never stays in memory and a concurrent subscribe cannot be lost.
 - Publishing to a missing topic reads nothing and creates nothing. Publishes cannot grow the registry.
 
@@ -87,38 +87,72 @@ The exact `papaya` API used (`compute` with remove-on-empty) is confirmed during
 - The reader builds the outbound frame once:
   - text: the envelope serialized to a `Utf8Bytes`;
   - binary: header and payload copied once into a `Bytes`.
-- For each subscriber other than itself, it reserves a slot with `try_reserve` and sends a refcount clone.
+- For each subscriber other than itself, it sends a refcount clone with `inbox.send(frame)`. The call never waits: if the inbox is full, it overwrites the oldest pending frame.
 - The cost of a publish is O(subscribers of the topic) inside the publisher's task. Today that cost is spread over N bridge tasks. Removing the bridge also removes one task and one wakeup per delivery.
 
-Back-of-envelope cost: a topic with 10 000 subscribers is about 10 000 `try_reserve` + `send` in one task. At roughly 50–100 ns each, the last subscriber's frame leaves 0.5–1 ms after the first. These are expected costs, not measurements. The bench run in the tasks measures them. If one hot topic makes this matter, a later change can split fanout across tasks.
+Back-of-envelope cost: a topic with 10 000 subscribers is about 10 000 `inbox.send` calls in one task. Each one takes that inbox's tail mutex and slot lock, which are uncontended unless several publishers hit the same receiver at once. At roughly 100–200 ns each, the last subscriber's frame leaves 1–2 ms after the first. These are expected costs, not measurements. The bench run in the tasks measures them. If one hot topic makes this matter, a later change can split fanout across tasks.
 
-### 4. Backpressure: drop for the slow receiver, warn exactly at the gap
+### 4. Backpressure: drop the oldest for the slow receiver, warn exactly at the gap
 
-- Each connection's outgoing queue holds `Outbound { dropped_before: u64, frame: Message }`, with capacity `SUBSCRIBER_QUEUE_CAPACITY = 256`. That matches today's bus depth, so slow-consumer tolerance stays about the same.
-- If `try_reserve` fails because the queue is full, the publisher increments that subscriber's `dropped` counter and moves on. The publisher is never held back.
-- If `try_reserve` succeeds, the publisher does `n = dropped.swap(0)` and sends `Outbound { dropped_before: n, frame }`.
-- The writer emits `{"type":"warning","dropped":n}` immediately before the frame whenever `n > 0`.
+**Policy: drop the oldest, exactly as today.** A receiver that falls behind loses the frames it had not read yet, and then gets the most recent ones. Today's global bus does this: a `Lagged(n)` receiver skips to the newest 256 frames. Keeping it matters for two reasons:
 
-A warning therefore lands exactly where the gap is, and the exact-count property in `delivery-backpressure` still holds. The swap happens only after a slot is reserved, so a counted drop is never lost to a failed send.
+- **Realtime semantics.** For game state, telemetry or dashboards, the newest frame is the valuable one, and drop-oldest is the norm for realtime fanout.
+- **Existing guarantees.** `slow_consumer_receives_a_warning_frame`, `delivery_resumes_after_a_warning`, `dropped_count_matches_the_frames_skipped` and `slow_receiver_does_not_hold_back_others` (`tests/gateway.rs:174-320`) depend on it. In each of them, B reads nothing while A sends 128 000 frames, then expects a `warning` and, in two of them, the final `{"marker":"end"}`.
 
-The connection's own control replies (`subscribed`, `unsubscribed`, `error`) go through the same queue with `send().await` from its reader. A connection that does not read its socket can only stall its own reader. The `warning` frame shape does not change.
+**Mechanism: a per-connection `broadcast` inbox with a single receiver.**
+
+- `INBOX_CAPACITY = 256`, the same depth as today's bus.
+- Publishers call `inbox.send(frame)`. It never waits, and when the ring is full it overwrites the oldest slot.
+- The writer is the only receiver. When it reads after falling behind, `recv` returns `Lagged(n)` with `n` exactly equal to the number of frames overwritten for this connection. The writer emits `{"type":"warning","dropped":n}` and continues with the oldest frame still in the ring, as the bridge does today.
+- The publisher never sends to its own inbox, so `n` never counts a connection's own frames. Today's global bus does count them for a lagging publisher.
+- **Batching:** the writer awaits one `recv`, then drains up to a batch with `try_recv`, which also reports `Lagged` in order, and flushes once per batch (`docs/decisions.md` entry 9).
+
+**Why not the `mpsc` with `try_reserve` from the first draft.** An `mpsc` can only refuse new frames, so it drops the newest. The warning then has nothing to ride on once the stream stops:
+
+- When B stops reading, its queue fills with the first 256 frames, and everything after is discarded, `{"marker":"end"}` included.
+- The warning was to be emitted before the next delivered frame, but none comes, so B never learns it lost anything. All four tests above fail.
+- The benchmark harness's `unaccounted` meter would also be non-zero on every overloaded run, wrongly marking it `incorrect` (`prepara-harness-para-topicos`).
+
+**Locks, stated plainly.** `broadcast::Sender::send` takes a mutex on the tail and a lock on the slot (tokio 1.53.1, `sync/broadcast.rs:662` and `:677`). Today's global bus already takes the same locks, with every publisher contending for one tail. With one inbox per connection, contention is limited to publishers writing to the same receiver at the same instant. The locks are held for a few instructions and never across `.await`. The gateway's own code adds no lock, and the hot-path invariant text says so explicitly instead of claiming the path is lock-free (decision 9).
+
+**Alternative kept for later:** a lock-free drop-oldest ring, for example crossbeam's `ArrayQueue::force_push`, with a notify. It removes tokio's locks, but placing the warning exactly at the gap under concurrent pushes and pops is the hard part that `broadcast` already solves. It is worth doing only if a measurement shows inbox contention mattering.
+
+**Control replies are never dropped.** `subscribed`, `unsubscribed` and `error` frames go through a separate small `mpsc` from the connection's own reader, with `send().await`. If they shared the inbox, a lagging connection could lose its own acknowledgement. The writer serves the control channel first (`biased` select). The visibility guarantee only needs the registry insert to happen before `subscribed` is sent (decision 7), so the two channels need no ordering between them.
+
+**Memory.** A 256-slot ring is allocated per connection up front, at an estimated ~20 KB. That replaces today's bus receiver and 32-slot `mpsc`. The figure is an estimate. The per-connection RSS from the benchmark run is the measurement.
 
 ### 5. Inbound protocol: the gateway parses its own frame, never `data`
 
-Text frames are parsed as:
+Text frames are parsed into a plain struct, and the dispatch on `type` happens after parsing:
 
 ```
-#[serde(tag = "type", rename_all = "snake_case")]
-enum ClientFrame<'a> {
-    Subscribe   { topic: Cow<'a, str> },
-    Unsubscribe { topic: Cow<'a, str> },
-    Publish     { topic: Cow<'a, str>, #[serde(borrow)] data: &'a RawValue },
+struct ClientFrame<'a> {
+    #[serde(rename = "type")] kind: &'a str,
+    #[serde(borrow)] topic: Cow<'a, str>,
+    #[serde(borrow, default, deserialize_with = "present")] data: Option<&'a RawValue>,
 }
 ```
 
+Each attribute is there for a measured reason. Each was checked against `serde_json` 1.0.151, the version in `Cargo.toml`:
+
+- **Not an internally tagged enum.** `#[serde(tag = "type")]` with a `&RawValue` field fails with `invalid type: newtype struct, expected any valid JSON value`. Worse, that enum shape first buffers the whole frame into serde's intermediate content tree, which would deserialize `data`. That violates "Never deserialize the payload". A plain struct reads `data` straight from the input as a raw slice.
+- **`#[serde(borrow)]` on `topic`.** Without it the `Cow` is always owned, so every publish would allocate the topic. With it, an unescaped topic borrows from the frame. `Option<Cow<str>>` does not borrow even with the attribute, so `topic` is not optional: a frame without it fails to parse and gets `INVALID_FRAME`.
+- **`deserialize_with = "present"` on `data`.** A plain `Option<&RawValue>` turns `"data":null` into `None`, so a `publish` of `null` would be rejected as missing `data`. The `message-relay` spec requires `null` to be accepted. `present` deserializes a `&RawValue` and wraps it in `Some`, so `null` becomes `Some("null")` and only an absent field is `None`. Checked results:
+  - `"data":null` → `Some("null")`;
+  - no `data` → `None`;
+  - `"data":  42  ` → `Some("42")`;
+  - object bytes kept verbatim.
+- **Duplicate fields** (`"topic":"a","topic":"b"`) fail with `duplicate field`, and get `INVALID_FRAME`.
+
+Dispatch after parsing:
+- `kind` `subscribe` or `unsubscribe` uses `topic` and ignores `data`;
+- `publish` requires `data` to be `Some`;
+- any other `kind` is `INVALID_FRAME`.
+
+Other rules:
 - This is the gateway's own control vocabulary, the same way `ServerMessage` already is. `data` is validated as JSON and embedded verbatim, exactly as today.
 - The envelope is `{"type":"message","topic":…,"from":…,"data":…}`. `topic` is re-serialized with standard JSON escaping. `data` is spliced.
-- Unknown extra fields are ignored, for forward compatibility. Missing fields, a wrong `type`, or a non-JSON frame produce `INVALID_FRAME`.
+- Unknown extra fields are ignored, for forward compatibility.
 
 Topic rules, identical for text and binary:
 
@@ -141,16 +175,16 @@ A `len` of 0, a frame shorter than `1 + len`, or a topic that is not UTF-8 produ
 
 These are the guarantees a client can rely on, and each is a spec scenario.
 
-- **Subscription visibility.** The registry insert happens before `subscribed` is queued. Any publish a client makes after another connection has received `subscribed` for that topic reaches that connection. A frame for the topic may arrive *before* `subscribed` if a publish raced the subscription. It carries `topic`, so the client can tell.
+- **Subscription visibility.** The registry insert happens before `subscribed` is sent to the connection's control channel. Any publish a client makes after another connection has received `subscribed` for that topic reaches that connection. A frame for the topic may arrive *before* `subscribed` if a publish raced the subscription. It carries `topic`, so the client can tell.
 - **Unsubscribe in flight.** After `unsubscribed`, frames for that topic that were already being fanned out may still arrive. Clients that care filter on `topic`. Closing this window would need per-frame subscription checks in the writer, which costs more than it buys.
-- **Per-sender order.** A sender's frames reach a given receiver in send order, across topics, while the receiver is not dropping. One reader task publishes them in order into one FIFO queue.
+- **Per-sender order.** A sender's frames reach a given receiver in send order, across topics, while the receiver is not dropping. One reader task publishes them in order, and each receiver has one FIFO inbox.
 - **No duplicates.** A publish targets exactly one topic, so a receiver gets at most one copy of each publish.
 
 ### 8. Lifecycle and cleanup
 
 - Each connection keeps its subscribed topics in a `Subscriptions` value owned by the reader task, with `Drop` removing the connection from every one of them.
 - When the connection ends, the `select!` aborts the reader, and dropping it unsubscribes everything. No path leaves a dead handle in the registry.
-- A handle whose queue is closed (connection mid-teardown) makes `try_reserve` fail with `Closed`, which is ignored.
+- A handle whose inbox has no receiver left (connection mid-teardown) makes `send` return an error, which is ignored.
 
 ### 9. Hot-path invariants checked
 
@@ -158,10 +192,10 @@ These are the guarantees a client can rely on, and each is a spec scenario.
 |---|---|
 | Payload never deserialized | Kept. The control frame is parsed, and `data` stays `&RawValue`. The invariant text is reworded to say so. |
 | One serialization per message | Kept. Text envelope and binary header are each built once per publish. |
-| Clone is a refcount bump | Kept. `Outbound` holds a `Message` backed by `Utf8Bytes`/`Bytes`. |
-| No locks on the hot path | Kept, but no longer trivial. Publish reads a lock-free map. The text changes from "one `AtomicUsize`" to "the `AtomicUsize` and the lock-free topic registry". |
-| Never `.await` holding a lock | Kept. There is no lock, and fanout is synchronous. |
-| Bounded everywhere | Kept. Queue of 256 per connection, at most 64 subscriptions per connection, topics of 255 bytes at most. The registry is bounded by `connections × 64` entries. |
+| Clone is a refcount bump | Kept. The inbox holds a `Message` backed by `Utf8Bytes`/`Bytes`. |
+| No locks on the hot path | Kept for the gateway's own code. Publish reads a lock-free map. Each `inbox.send` takes tokio's internal tail and slot locks (decision 4), as the global bus does today, but contended only per receiver instead of globally. The invariant text changes to: "no lock in gateway code; shared state is the `AtomicUsize` and the lock-free topic registry; channel-internal locks are short and never held across `.await`". |
+| Never `.await` holding a lock | Kept. Fanout is synchronous, and tokio's internal locks are released inside `send`. |
+| Bounded everywhere | Kept. Inbox of 256 per connection, a small control channel per connection, at most 64 subscriptions per connection, topics of 255 bytes at most. The registry is bounded by `connections × 64` entries. |
 | No per-message logging | Kept. Drops are counted, not logged. Connect and disconnect log lines still report the lag total. |
 
 ### 10. Harness: provided by `prepara-harness-para-topicos`
@@ -187,9 +221,9 @@ The first run of the real gateway under `topics` is the first time the harness's
 
 When this change starts, *Measured baselines* and *Status* in `docs/architecture.md` hold the global-bus numbers that `prepara-harness-para-topicos` re-measured with the new harness under `--protocol legacy`. This change replaces the part that dominates those numbers:
 
-- Fanout moves from one bridge task per receiver, fed by a 256-slot broadcast ring, to a single publisher task that does `try_reserve` into each subscriber's queue.
+- Fanout moves from one bridge task per receiver, fed by one shared 256-slot broadcast ring, to a single publisher task that sends into each subscriber's own 256-slot inbox.
 - The task count per connection drops from three to two, which changes the per-connection RSS figure.
-- Lag is triggered by a full per-connection queue instead of the bus position, so the cliff behaves differently.
+- Lag is measured per inbox instead of against one shared ring, so a busy topic no longer pushes receivers of other topics into lag, and the cliff behaves differently.
 - Every frame now carries a control wrapper and a `topic`, so the bytes per delivery change too.
 
 Same invocation does not mean same system. After the implementation:
@@ -233,7 +267,7 @@ Where this design differs, and why:
 ### Extension points (not implemented)
 
 - **Presence:** the topic's `Arc<[Subscriber]>` is the member list. Join and leave events hook the same compute that changes membership.
-- **Direct delivery by id:** a second lock-free map `Uuid → Subscriber`, filled at connect and emptied by the same `Drop`, delivering through the same `try_reserve` path.
+- **Direct delivery by id:** a second lock-free map `Uuid → Subscriber`, filled at connect and emptied by the same `Drop`, delivering through the same `inbox.send` path.
 - **Backplane:** the first local subscriber of a topic makes the instance subscribe to it on the backplane, and removing the empty entry unsubscribes it. A local publish fans out locally and is sent once to the backplane. Remote frames enter through the same fanout function.
 - **Authorization (expected next step):** `subscribe`, and `publish` if publishing is ever restricted, are the single choke points where a connect-time credential can be checked against a key. A prefix convention, such as Pusher's `private-` or Centrifugo's namespaces, would let the rule stay payload-agnostic. Authentication at connect time has to come first (decision 4 in `docs/decisions.md`).
 
@@ -253,23 +287,23 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
-## 13. The registry holds subscriber queues, read without locks
+## 13. The registry holds subscriber inboxes, read without locks
 
 **Context.** Routing needs topic → subscribers, which is the first shared state beyond the connection counter (entry 6 anticipated a registry). A lock on the publish path would serialize every publisher.
 
-**Decision.** A lock-free concurrent map (`papaya`) from topic to an immutable `Arc<[Subscriber]>`, where a subscriber is the connection's id, outgoing queue and drop counter. Membership changes are copy-on-write and remove the entry when it empties. The publisher fans out with `try_reserve` into each queue, and the bridge task is removed. Rejected alternatives: a broadcast channel per topic, `RwLock`/`DashMap`, and subscriptions held in Redis (see the change's design).
+**Decision.** A lock-free concurrent map (`papaya`) from topic to an immutable `Arc<[Subscriber]>`, where a subscriber is the connection's id and its inbox. Membership changes are copy-on-write and remove the entry when it empties. The publisher fans out by sending into each inbox, and the bridge task is removed. Rejected alternatives: a broadcast channel per topic, `RwLock`/`DashMap`, and subscriptions held in Redis (see the change's design).
 
-**Consequence.** Publish takes no lock and cannot grow memory. Membership changes cost O(topic size). Fanout work moves into the publisher's task. The same handle serves later presence, direct delivery and backplane work.
+**Consequence.** Publish takes no lock in gateway code and cannot grow memory. Membership changes cost O(topic size). Fanout work moves into the publisher's task. The same handle serves later presence, direct delivery and backplane work.
 
 ---
 
-## 14. Backpressure is per receiver queue
+## 14. Backpressure is a per-connection inbox that drops the oldest
 
-**Context.** Without the bus there is no `Lagged(n)`. The receiver's queue becomes the only buffer.
+**Context.** Without the global bus there is no shared ring to lag behind. A first draft used an `mpsc` per connection, but an `mpsc` can only refuse new frames. That drops the newest, and a warning has nothing to ride on once the stream stops, so a receiver that stopped reading never learned what it lost.
 
-**Decision.** Each connection's queue holds 256 frames. A full queue drops the frame for that receiver and counts it. The next delivered frame carries the count, and the writer emits `{"type":"warning","dropped":n}` right before it. Amends the mechanism of entry 7. The policy stays the same.
+**Decision.** Each connection's inbox is a 256-slot `tokio::sync::broadcast` channel with a single receiver, its writer. Publishers never wait, a full inbox overwrites its oldest frame, and the writer turns `Lagged(n)` into `{"type":"warning","dropped":n}` before continuing with the oldest frame still held. Control replies (`subscribed`, `unsubscribed`, `error`) use a separate channel and are never dropped. This amends the mechanism of entry 7, and the policy and the wire frame are unchanged.
 
-**Consequence.** The `warning` frame and the exact-count guarantee are unchanged for clients. A slow receiver still never slows a publisher.
+**Consequence.** A slow receiver loses its oldest frames, is told exactly how many, and still gets the newest, as today. The count no longer includes a connection's own frames. `broadcast::send` takes tokio's internal locks, now contended per receiver instead of globally. A lock-free ring is a later option if a measurement shows that contention.
 
 ---
 
@@ -286,6 +320,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 ## Risks / Trade-offs
 
 - **Open subscriptions.** Any connection can subscribe to any key, so topic keys are not a secret and must not be treated as one. This is documented in the README and entry 12, and authorization is named as the next step (decision 12).
+- **Channel-internal locks remain.** `broadcast::send` locks the inbox's tail and slot. That is better than today's single global tail, but it is not lock-free. Mitigation: measured by the `churn-500` and fanout rows. The lock-free ring in decision 4 is the fallback if inbox contention shows up.
 - **Breaking every client.** This is accepted and recorded in entry 12. The README protocol section is rewritten as the reference.
 - **New dependency on the hot path.** `papaya` correctness under concurrent compute and remove is load-bearing. Mitigation: integration tests that subscribe and unsubscribe concurrently with publishing, and a bench run.
 - **Fanout concentrated in one task.** A single very large topic adds latency proportional to its size for its last subscriber (decision 3). The bench row `goal-1m-fanout` at `T = 1` measures the worst case directly.
