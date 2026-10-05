@@ -12,6 +12,6 @@
 
 ## 3. Verify
 
-- [ ] 3.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` locally before opening the `spec:implementa` PR
+- [x] 3.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` locally before opening the `spec:implementa` PR
 - [ ] 3.2 CI runs the same three commands on that PR; `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 3.3 An independent session fills `verificacao.md`, including the discrimination sensor: change `MAX_MESSAGE_SIZE` to `64 * 1024 + 1` in an isolated worktree and confirm `oversized_frame_drops_the_sender_without_relaying` fails
