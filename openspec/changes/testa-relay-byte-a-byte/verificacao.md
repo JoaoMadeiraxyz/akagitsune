@@ -2,10 +2,12 @@
 
 Requisito sem citacao conta como NAO coberto -- nao como provavelmente coberto.
 
+Rodada 2. A rodada 1 (commit `216b4d0`) apontou que o cenario "Payload bytes are kept exactly" e a tarefa 1.1 traziam um `é` literal em UTF-8, enquanto o teste envia o escape `\u00e9`. A causa foi um erro de encoding ao escrever os artefatos. O commit `df3c22a` trocou o `é` pelo escape `\u00e9` em proposal.md, design.md, tasks.md e no delta spec, sem tocar `tests/` nem `src/` (`git diff df3c22a~1 df3c22a -- src tests` vazio). Esta rodada reconfere o cenario e refaz o gate. Como o codigo e os testes sao os mesmos da rodada 1, os resultados do sensor continuam valendo.
+
 ### Text frames are relayed in an envelope
 
 - Scenario "Object payload reaches another connection" -- prova: `tests/gateway.rs:60` -- `assert_eq!(next_json(&mut b).await, json!({"type": "message", "from": a_id, "data": payload}))`, com o payload `{"hp":42,"pos":[1,2],"nested":{"any":null}}` enviado em `tests/gateway.rs:57-58`. A comparacao e semantica (`Value`), o que basta para este cenario: ele nao exige bytes exatos. Os bytes exatos ficam com os dois cenarios abaixo.
-- Scenario "Payload bytes are kept exactly" -- prova parcial: `tests/gateway.rs:75` -- `assert_eq!(next_msg(&mut b).await.into_text().unwrap().as_str(), format!(r#"{{"type":"message","from":"{a_id}","data":{payload}}}"#))`, comparando o texto cru do frame. LACUNA: o payload do teste (`tests/gateway.rs:73`) e `{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}`, com o escape `\u00e9` (6 bytes ASCII), enquanto o cenario da spec (e a tarefa 1.1) trazem `"u":"é"` literal em UTF-8 (bytes `C3 A9`). O texto exato do cenario nao e exercitado. O teste e mais forte que o cenario nesse ponto (um round trip por `Value` reescreve `\u00e9` para `é`, mas mantem `é` literal), e o design.md pede "a `\u` escape". Ou seja, a divergencia esta na spec e na tarefa 1.1, nao no teste.
+- Scenario "Payload bytes are kept exactly" -- prova: `tests/gateway.rs:75` -- `assert_eq!(next_msg(&mut b).await.into_text().unwrap().as_str(), format!(r#"{{"type":"message","from":"{a_id}","data":{payload}}}"#))`, comparando o texto cru do frame, com o payload de `tests/gateway.rs:73`. Na rodada 2, o payload do WHEN do cenario (delta spec, linha 16) e o literal do teste foram comparados com `xxd` e sao identicos byte a byte, inclusive o escape `"u":"\u00e9"` (bytes `5c 75 30 30 65 39`). O THEN (linha 17) e igual ao `format!` esperado com esse payload. O delta spec ja nao contem nenhum `é` literal.
 - Scenario "Surrounding whitespace is dropped" -- prova: `tests/gateway.rs:80` envia `"  42  "` e `tests/gateway.rs:81` -- `assert_eq!(next_msg(&mut b).await.into_text().unwrap().as_str(), format!(r#"{{"type":"message","from":"{a_id}","data":42}}"#))`, que compara o texto exato.
 
 Nenhum dos tres cenarios usa asserção rasa: nenhum para em "nao deu erro", nenhum depende de mock, e o valor esperado e montado no proprio teste, sem constante importada do codigo sob teste.
@@ -24,18 +26,14 @@ Cada mutacao rodou numa worktree isolada (`git worktree add --detach /tmp/vrb-mN
 ## Quem rodou, e quando
 
 - comando: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-- resultado: pass (fmt limpo, clippy sem avisos, todos os testes verdes), rodado em 2026-10-05 sobre o HEAD `6362841`
+- resultado: pass nas duas rodadas. Rodada 1 sobre `6362841`, rodada 2 sobre `df3c22a`, ambas em 2026-10-05. A validacao `--strict` e a validacao de regras das changes tambem passaram de novo.
 - testes antes/depois: 14 no main (7 em `tests/gateway.rs` + 7 unitarios) / 15 no HEAD (8 + 7)
 - CI: .github/workflows/ci.yml roda os mesmos tres comandos no PR. O main nao tem branch protection, entao quem revisa precisa confirmar o CI verde antes do merge.
 - sessao independente: subagente verificador em sessao nova, sem o historico da implementacao
 - validacao: `openspec validate testa-relay-byte-a-byte --strict` passou, e a validacao de regras das changes tambem
 
-Escopo: o diff `main...HEAD` toca apenas `tests/gateway.rs` (teste novo), o delta da spec (linha `Teste:`) e `tasks.md`. Nao ha mudanca em `src/`, o que bate com a proposal.md.
+Escopo: o diff `main...HEAD` toca apenas `tests/gateway.rs` (teste novo) e os artefatos da change: o delta da spec (linha `Teste:` e o escape `\u00e9`), `tasks.md`, `proposal.md`, `design.md` e este relatorio. Nao ha mudanca em `src/`, o que bate com a proposal.md.
 
 ## Veredito
 
-lacunas:
-
-1. O cenario "Payload bytes are kept exactly" (e a tarefa 1.1) especifica `"u":"é"` literal, mas o teste envia `"u":"\u00e9"`. Isso e uma lacuna de precisao da spec. A correcao e alinhar o cenario e a tarefa 1.1 ao escape `\u00e9`, como o design.md ja pede, e nao mexer no teste. Feito isso, o cenario fica coberto por `tests/gateway.rs:75`.
-
-Fora isso, o gate passa, os tres mutantes foram mortos e o escopo esta correto. A tarefa 3.3 continua aberta ate a spec ser corrigida.
+aprovado. A lacuna da rodada 1 foi fechada com o alinhamento da spec ao teste (`df3c22a`). Os tres cenarios tem prova `arquivo:linha` com asserção exata, o gate passa, os tres mutantes foram mortos e o escopo bate com a proposal.md.
