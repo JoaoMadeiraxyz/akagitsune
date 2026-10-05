@@ -10,6 +10,6 @@
 
 ## 3. Verify
 
-- [ ] 3.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` locally before opening the `spec:implementa` PR
+- [x] 3.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` locally before opening the `spec:implementa` PR
 - [ ] 3.2 CI runs the same three commands on that PR; `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 3.3 An independent session fills `verificacao.md`, including the discrimination sensor: in an isolated worktree, round-trip `data` through `serde_json::Value` at `src/ws.rs:98` and confirm the new test fails while `payload_is_relayed_verbatim_to_others` still passes
