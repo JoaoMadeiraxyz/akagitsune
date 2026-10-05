@@ -6,7 +6,7 @@
 
 ## 2. Spec
 
-- [ ] 2.1 Point the requirement's `Teste:` line in the delta to the new test with its `tests/gateway.rs:<line>`
+- [x] 2.1 Point the requirement's `Teste:` line in the delta to the new test with its `tests/gateway.rs:<line>`
 
 ## 3. Verify
 
