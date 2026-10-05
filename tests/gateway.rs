@@ -65,6 +65,26 @@ async fn payload_is_relayed_verbatim_to_others() {
 }
 
 #[tokio::test]
+async fn text_payload_bytes_are_relayed_verbatim() {
+    let url = spawn_server().await;
+    let (mut a, a_id) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    let payload = r#"{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}"#;
+    a.send(WsMessage::text(payload)).await.unwrap();
+    assert_eq!(
+        next_msg(&mut b).await.into_text().unwrap().as_str(),
+        format!(r#"{{"type":"message","from":"{a_id}","data":{payload}}}"#)
+    );
+
+    a.send(WsMessage::text("  42  ")).await.unwrap();
+    assert_eq!(
+        next_msg(&mut b).await.into_text().unwrap().as_str(),
+        format!(r#"{{"type":"message","from":"{a_id}","data":42}}"#)
+    );
+}
+
+#[tokio::test]
 async fn any_json_shape_is_accepted() {
     let url = spawn_server().await;
     let (mut a, _) = connect(&url).await;

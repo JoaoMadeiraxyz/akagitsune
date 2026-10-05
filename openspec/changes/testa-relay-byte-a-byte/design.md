@@ -6,7 +6,7 @@ Measured on `main` with a throwaway test (not committed), sending text frames fr
 
 | sent | `data` received |
 |---|---|
-| `{"b":1,  "a":[ 1,2 ],"u":"é"}` | `{"b":1,  "a":[ 1,2 ],"u":"é"}` |
+| `{"b":1,  "a":[ 1,2 ],"u":"\u00e9"}` | `{"b":1,  "a":[ 1,2 ],"u":"\u00e9"}` |
 | `  42  ` | `42` |
 | `\n{"x" : 1.50}\t` | `{"x" : 1.50}` |
 
