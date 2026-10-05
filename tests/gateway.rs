@@ -66,7 +66,7 @@ async fn frame_at_size_limit_is_relayed() {
     let (mut b, _) = connect(&url).await;
 
     let payload = json_string_of_len(64 * 1024);
-    a.send(WsMessage::text(payload.clone())).await.unwrap();
+    send(&mut a, WsMessage::text(payload.clone())).await;
 
     let data: Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(
@@ -81,9 +81,7 @@ async fn oversized_frame_drops_the_sender_without_relaying() {
     let (mut a, _) = connect(&url).await;
     let (mut b, _) = connect(&url).await;
 
-    a.send(WsMessage::text(json_string_of_len(64 * 1024 + 1)))
-        .await
-        .unwrap();
+    send(&mut a, WsMessage::text(json_string_of_len(64 * 1024 + 1))).await;
 
     match tokio::time::timeout(Duration::from_secs(5), a.next())
         .await
@@ -103,7 +101,7 @@ async fn payload_is_relayed_verbatim_to_others() {
     let (mut b, _) = connect(&url).await;
 
     let payload = json!({"hp": 42, "pos": [1, 2], "nested": {"any": null}});
-    a.send(WsMessage::text(payload.to_string())).await.unwrap();
+    send(&mut a, WsMessage::text(payload.to_string())).await;
 
     assert_eq!(
         next_json(&mut b).await,
@@ -119,13 +117,13 @@ async fn text_payload_bytes_are_relayed_verbatim() {
     let (mut b, _) = connect(&url).await;
 
     let payload = r#"{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}"#;
-    a.send(WsMessage::text(payload)).await.unwrap();
+    send(&mut a, WsMessage::text(payload)).await;
     assert_eq!(
         next_msg(&mut b).await.into_text().unwrap().as_str(),
         format!(r#"{{"type":"message","from":"{a_id}","data":{payload}}}"#)
     );
 
-    a.send(WsMessage::text("  42  ")).await.unwrap();
+    send(&mut a, WsMessage::text("  42  ")).await;
     assert_eq!(
         next_msg(&mut b).await.into_text().unwrap().as_str(),
         format!(r#"{{"type":"message","from":"{a_id}","data":42}}"#)
@@ -139,7 +137,7 @@ async fn any_json_shape_is_accepted() {
     let (mut b, _) = connect(&url).await;
 
     for payload in [json!(42), json!("texto"), json!([1, 2, 3]), json!(null)] {
-        a.send(WsMessage::text(payload.to_string())).await.unwrap();
+        send(&mut a, WsMessage::text(payload.to_string())).await;
         assert_eq!(next_json(&mut b).await["data"], payload);
     }
 }
@@ -151,7 +149,7 @@ async fn binary_frames_pass_through_untouched() {
     let (mut b, _) = connect(&url).await;
 
     let bytes = vec![0x00, 0xff, 0x10, 0x42];
-    a.send(WsMessage::binary(bytes.clone())).await.unwrap();
+    send(&mut a, WsMessage::binary(bytes.clone())).await;
 
     assert_eq!(next_msg(&mut b).await, WsMessage::binary(bytes));
     assert_silent(&mut a).await;
@@ -165,9 +163,7 @@ async fn fifo_order_holds_across_a_multi_batch_burst() {
 
     let burst = 200;
     for i in 0..burst {
-        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
-            .await
-            .unwrap();
+        send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
     }
 
     for i in 0..burst {
@@ -183,9 +179,7 @@ async fn slow_consumer_receives_a_warning_frame() {
 
     let overflow = realtime_gateway::state::BROADCAST_CAPACITY * 500;
     for i in 0..overflow {
-        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
-            .await
-            .unwrap();
+        send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
     }
 
     let warning = loop {
@@ -204,13 +198,13 @@ async fn delivery_resumes_after_a_warning() {
     let (mut b, _) = connect(&url).await;
 
     for i in 0..128_000 {
-        a.send(WsMessage::text(json!({ "seq": i }).to_string()))
-            .await
-            .unwrap();
+        send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
     }
-    a.send(WsMessage::text(json!({ "marker": "end" }).to_string()))
-        .await
-        .unwrap();
+    send(
+        &mut a,
+        WsMessage::text(json!({ "marker": "end" }).to_string()),
+    )
+    .await;
 
     let mut warnings = 0;
     let mut last_seq: Option<u64> = None;
@@ -248,18 +242,18 @@ async fn slow_receiver_does_not_hold_back_others() {
     let chunk = 100;
     for start in (0..128_000).step_by(chunk) {
         for i in start..start + chunk {
-            a.send(WsMessage::text(json!({ "seq": i }).to_string()))
-                .await
-                .unwrap();
+            send(&mut a, WsMessage::text(json!({ "seq": i }).to_string())).await;
         }
         for i in start..start + chunk {
             let msg = next_json(&mut c).await;
             assert_eq!(msg["data"], json!({ "seq": i }), "{msg}");
         }
     }
-    a.send(WsMessage::text(json!({ "marker": "end" }).to_string()))
-        .await
-        .unwrap();
+    send(
+        &mut a,
+        WsMessage::text(json!({ "marker": "end" }).to_string()),
+    )
+    .await;
     assert_eq!(next_json(&mut c).await["data"], json!({ "marker": "end" }));
 
     loop {
@@ -281,13 +275,11 @@ async fn invalid_json_is_rejected_without_broadcasting() {
     let (mut a, _) = connect(&url).await;
     let (mut b, _) = connect(&url).await;
 
-    a.send(WsMessage::text("not json at all")).await.unwrap();
+    send(&mut a, WsMessage::text("not json at all")).await;
 
     assert_eq!(next_json(&mut a).await["type"], "error");
     assert_silent(&mut b).await;
 
-    a.send(WsMessage::text(json!({"ok": true}).to_string()))
-        .await
-        .unwrap();
+    send(&mut a, WsMessage::text(json!({"ok": true}).to_string())).await;
     assert_eq!(next_json(&mut b).await["data"], json!({"ok": true}));
 }

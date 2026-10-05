@@ -6,7 +6,7 @@
 
 ## 2. Call sites
 
-- [ ] 2.1 Route every `.send(..)` in `tests/gateway.rs` through the helper, including tests merged by other changes before implementation; `rg '\.send\(' tests/gateway.rs` must only match the helper itself
+- [x] 2.1 Route every `.send(..)` in `tests/gateway.rs` through the helper, including tests merged by other changes before implementation; `rg '\.send\(' tests/gateway.rs` must only match the helper itself
 
 ## 3. Verify
 
