@@ -81,7 +81,7 @@ Membership changes cost O(subscribers of that topic), because the slice is copie
   - A map lock is shared across topics and taken for the whole lookup. `DashMap` shards it, but a membership change write-locks the shard while every publish to any topic in that shard read-locks it, so a burst of subscribes stalls unrelated publishers.
   - With `papaya`, a publish never waits for a membership change, because a reader sees the old or the new slice and never a lock.
   - The inbox locks only couple publishers aimed at the same receiver, and only for one slot write.
-  - The `CLAUDE.md` rule is about this coupling: no lock in gateway code that one connection's activity can hold against another's publish path.
+  - Under the reworded rule (entry 16), gateway code takes no lock at all. A map lock would be exactly such a lock, written in gateway code and held against other topics' publishers.
 - An `arc-swap` of the whole map copies every topic on every membership change.
 
 The `papaya` API was checked by compiling against 0.2.5:
@@ -121,7 +121,7 @@ Back-of-envelope cost: a topic with 10 000 subscribers is about 10 000 `inbox.se
 - The warning was to be emitted before the next delivered frame, but none comes, so B never learns it lost anything. All four tests above fail.
 - The benchmark harness's `unaccounted` meter would also be non-zero on every overloaded run, wrongly marking it `incorrect` (`prepara-harness-para-topicos`).
 
-**Locks, stated plainly.** `broadcast::Sender::send` takes a mutex on the tail and a lock on the slot (tokio 1.53.1, `sync/broadcast.rs:662` and `:677`). Today's global bus already takes the same locks, with every publisher contending for one tail. With one inbox per connection, contention is limited to publishers writing to the same receiver at the same instant. The locks are held for a few instructions and never across `.await`. The gateway's own code adds no lock, and the hot-path invariant text says so explicitly instead of claiming the path is lock-free (decision 9).
+**Locks, stated plainly.** `broadcast::Sender::send` takes a mutex on the tail and a lock on the slot (tokio 1.53.1, `sync/broadcast.rs:662` and `:677`). Today's global bus already takes the same locks, with every publisher contending for one tail. With one inbox per connection, contention is limited to publishers writing to the same receiver at the same instant. The locks are held for a few instructions and never across `.await`. The gateway's own code adds no lock. The project owner decided to reword the hard rule accordingly (entry 16) instead of claiming the path is lock-free (decision 9).
 
 **Alternative kept for later:** a lock-free drop-oldest ring, for example crossbeam's `ArrayQueue::force_push`, with a notify. It removes tokio's locks, but placing the warning exactly at the gap under concurrent pushes and pops is the hard part that `broadcast` already solves. It is worth doing only if a measurement shows inbox contention mattering.
 
@@ -202,7 +202,7 @@ These are the guarantees a client can rely on, and each is a spec scenario.
 | Payload never deserialized | Kept. The control frame is parsed, and `data` stays `&RawValue`. The invariant text is reworded to say so. |
 | One serialization per message | Kept. Text envelope and binary header are each built once per publish. |
 | Clone is a refcount bump | Kept. The inbox holds a `Message` backed by `Utf8Bytes`/`Bytes`. |
-| No locks on the hot path | Kept for the gateway's own code. Publish reads a lock-free map. Each `inbox.send` takes tokio's internal tail and slot locks (decision 4), as the global bus does today, but contended only per receiver instead of globally. The invariant text changes to: "no lock in gateway code; shared state is the `AtomicUsize` and the lock-free topic registry; channel-internal locks are short and never held across `.await`". |
+| No locks on the hot path | Kept, under the reworded rule decided for this change (entry 16): "Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`." Publish reads a lock-free map, and gateway code takes no lock. Each `inbox.send` takes tokio's short internal tail and slot locks (decision 4), as the global bus already does today, but contended only per receiver instead of globally. Shared state is the `AtomicUsize` and the lock-free topic registry. |
 | Never `.await` holding a lock | Kept. Fanout is synchronous, and tokio's internal locks are released inside `send`. |
 | Bounded everywhere | Kept. Inbox of `INBOX_CAPACITY = 256` and control channel of `CONTROL_QUEUE_CAPACITY = 16` per connection, at most 64 subscriptions per connection, topics of 255 bytes at most. The registry is bounded by `connections × 64` entries. |
 | No per-message logging | Kept. Drops are counted, not logged. Connect and disconnect log lines still report the lag total. |
@@ -326,10 +326,20 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
+## 16. The no-locks rule covers gateway code, not tokio channel internals
+
+**Context.** `CLAUDE.md` said "No locks on the hot path", and `docs/architecture.md` said the only shared mutable state was one `AtomicUsize`. Neither was literally true: today's global bus is a `tokio::sync::broadcast`, whose `send` locks the channel tail and a slot (tokio 1.53.1, `sync/broadcast.rs:662` and `:677`), with every publisher contending on that one tail. Topic routing keeps `broadcast`, now as one inbox per connection, so the question had to be decided explicitly.
+
+**Decision.** The rule is reworded: "Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`." Gateway code takes no lock and holds nothing across `.await`. Channel-internal locks are accepted because they are held for a few instructions, are released inside the call, and in this design are contended only by publishers writing to the same receiver at the same instant, instead of by every publisher as today. Replacing the inbox with a lock-free ring is not done preemptively. It is reopened only if a benchmark shows inbox contention, which the `ingest-50`, `goal-1m-ingest` and `goal-1m-mesh` rows measure.
+
+**Consequence.** The rule now describes what the code does. Reviews check gateway code for locks and for `.await` while holding one, not tokio's internals. A future dependency that takes locks inside its own calls falls under the same allowance only if those locks are short and never held across `.await`; anything else needs a new entry.
+
+---
+
 ## Risks / Trade-offs
 
 - **Open subscriptions.** Any connection can subscribe to any key, so topic keys are not a secret and must not be treated as one. This is documented in the README and entry 12, and authorization is named as the next step (decision 12).
-- **Channel-internal locks remain.** `broadcast::send` locks the inbox's tail and slot. That is better than today's single global tail, but it is not lock-free. Inbox contention needs many publishers sending to the same receiver. That is the shape of `ingest-50`, `goal-1m-ingest` and `goal-1m-mesh`, so those rows measure it; the fanout and churn rows do not. The lock-free ring in decision 4 is the fallback if those rows show it.
+- **Channel-internal locks remain, by decision.** `broadcast::send` locks the inbox's tail and slot. That is better than today's single global tail, and it is allowed under the reworded rule (entry 16). Inbox contention needs many publishers sending to the same receiver. That is the shape of `ingest-50`, `goal-1m-ingest` and `goal-1m-mesh`, so those rows measure it; the fanout and churn rows do not. The lock-free ring in decision 4 is the fallback if those rows show it.
 - **Breaking every client.** This is accepted and recorded in entry 12. The README protocol section is rewritten as the reference.
 - **New dependency on the hot path.** `papaya` correctness under concurrent compute and remove is load-bearing. Mitigation: integration tests that subscribe and unsubscribe concurrently with publishing, and a bench run.
 - **Fanout concentrated in one task.** A single very large topic adds latency proportional to its size for its last subscriber (decision 3). The largest topic any scenario measures has 1 001 members (`beyond-2m-fanout`). The 10 000-subscriber estimate in decision 3 stays unmeasured and is recorded as a scalability limit in `docs/architecture.md`, not as a measured result.

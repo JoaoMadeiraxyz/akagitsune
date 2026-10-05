@@ -12,6 +12,7 @@ Two things make it more than a drive-by change, so the decision entries in `desi
 
 - The gateway gains a small client-to-server protocol (`subscribe`, `unsubscribe`, `publish`). This replaces decision 4, "there is no client-to-server protocol beyond send a frame".
 - The gateway gains shared state beyond the `AtomicUsize`: a registry from topic to subscribers. It must stay bounded and lock-free on the publish path.
+- The hard rule "No locks on the hot path" is reworded, by the project owner's decision, to what the code actually does: "Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`." Today's global bus already relies on tokio's internal `broadcast` locks. The per-connection inbox keeps them and contends only per receiver (`design.md` decision entry 16).
 
 Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other domain term appears in frames, types, constants or error messages.
 
