@@ -34,7 +34,7 @@ Answering one in isolation constrains the others, so the design below follows a 
 **Non-Goals:**
 
 - Presence, direct delivery by connection id, wildcard or predicate subscriptions, a backplane, authorization of subscriptions. Each is a later change. The section *Extension points* says where each would plug in.
-- Topic-level backpressure attribution. A `warning` stays per connection.
+- Topic-level backpressure attribution. A `warning` stays per connection. The consequence is spelled out in decision 4, *One inbox for all of a connection's topics*, and per-topic loss accounting is listed under *Extension points* as a possible later change.
 
 ## Decisions
 
@@ -132,6 +132,17 @@ The benchmark rows measure the real figure. If one hot topic makes it matter, a 
 **Alternative kept for later:** a lock-free drop-oldest ring, for example crossbeam's `ArrayQueue::force_push`, with a notify. It removes tokio's locks, but placing the warning exactly at the gap under concurrent pushes and pops is the hard part that `broadcast` already solves. It is worth doing only if a measurement shows inbox contention mattering.
 
 **Control replies are never dropped.** `subscribed`, `unsubscribed` and `error` frames go through a separate `mpsc` of `CONTROL_QUEUE_CAPACITY = 16` from the connection's own reader, with `send().await`. The reader produces at most one reply per inbound frame. A connection that floods control frames without reading its socket fills those 16 slots and then stalls only its own reader. If they shared the inbox, a lagging connection could lose its own acknowledgement. The writer serves the control channel first (`biased` select). The visibility guarantee only needs the registry insert to happen before `subscribed` is sent (decision 7), so the two channels need no ordering between them.
+
+**One inbox for all of a connection's topics.** A connection subscribed to several topics has a single inbox and a single `dropped` count. That has two consequences clients must know about:
+
+- **A busy topic can push out a quiet one.** When the connection falls behind, the oldest pending frames are overwritten whatever their topic. A rare frame on a quiet topic can be lost because a busy topic filled the ring after it.
+- **A `warning` does not say which topics lost frames.** `dropped: n` is the total for the connection, so a client cannot tell from the warning alone whether its quiet topic was affected.
+
+This is accepted for this change. Isolating topics would need one inbox per connection-topic pair: up to 64 rings of 20 632 bytes each (about 1.3 MB per fully subscribed connection), and a writer polling up to 64 queues. A client that must protect a topic from another topic's volume opens a second connection for it. That works today and costs one more 20 KB inbox.
+
+For comparison, NATS client libraries hold pending limits per subscription in most languages: "Pending limits are the maximum number of messages and the maximum number of bytes the client will hold in one subscription's pending buffer". The Rust client is the documented exception, with one `subscription_capacity` for the whole connection ([docs.nats.io slow consumers](https://docs.nats.io/learn/resilient-clients/slow-consumers), [Rust client events](https://docs.nats.io/using-nats/developer/connecting/events/slow)).
+
+The benchmark harness measures the effect instead of leaving it as prose. `prepara-harness-para-topicos` adds an extra quiet topic that every connection also subscribes to, and reports its delivery separately.
 
 **Memory**, measured with a counting allocator under the same versions:
 
@@ -343,6 +354,8 @@ Where this design differs, and why:
   Those products have an application server in the middle that does the real publishing, so room membership doubles as a permission. This gateway has no application server inside it: a backend that publishes is just another connection. Requiring a subscription would force it to receive a topic's whole traffic just to write to it, and would break fan-in uses (telemetry, a backend publishing notices it never reads). It would not protect anything either, since any connection may subscribe. The `from` field is set by the gateway, so a publisher cannot impersonate another connection.
 
 ### Extension points (not implemented)
+
+- **Per-topic loss accounting:** either a per-topic breakdown in `warning`, which needs the topic kept alongside each pending frame to count overwritten ones per topic, or one inbox per connection-topic pair, at the memory cost given in decision 4. Worth deciding only with the overlapping-topic benchmark rows in hand.
 
 - **Presence:** the topic's `Arc<[Subscriber]>` is the member list. Join and leave events hook the same compute that changes membership.
 - **Direct delivery by id:** a second lock-free map `Uuid → Subscriber`, filled at connect and emptied by the same `Drop`, delivering through the same `inbox.send` path.
