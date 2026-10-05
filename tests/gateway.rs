@@ -69,6 +69,27 @@ async fn frame_at_size_limit_is_relayed() {
 }
 
 #[tokio::test]
+async fn oversized_frame_drops_the_sender_without_relaying() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+
+    a.send(WsMessage::text(json_string_of_len(64 * 1024 + 1)))
+        .await
+        .unwrap();
+
+    match tokio::time::timeout(Duration::from_secs(5), a.next())
+        .await
+        .expect("sender connection is still open")
+    {
+        None | Some(Err(_)) => (),
+        Some(Ok(WsMessage::Close(frame))) => panic!("unexpected close frame: {frame:?}"),
+        Some(Ok(other)) => panic!("unexpected frame: {other:?}"),
+    }
+    assert_silent(&mut b).await;
+}
+
+#[tokio::test]
 async fn payload_is_relayed_verbatim_to_others() {
     let url = spawn_server().await;
     let (mut a, a_id) = connect(&url).await;
