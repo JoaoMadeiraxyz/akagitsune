@@ -2,7 +2,7 @@
 
 ## 1. Tests
 
-- [x] 1.1 Add `text_payload_bytes_are_relayed_verbatim` to `tests/gateway.rs`: A sends `{"b":1,  "a":[ 1,2 ],"u":"é","n":1.50}` and then `  42  `; B's raw text frames equal `{"type":"message","from":"<A's id>","data":<exact payload>}` and `{"type":"message","from":"<A's id>","data":42}`
+- [x] 1.1 Add `text_payload_bytes_are_relayed_verbatim` to `tests/gateway.rs`: A sends `{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}` and then `  42  `; B's raw text frames equal `{"type":"message","from":"<A's id>","data":<exact payload>}` and `{"type":"message","from":"<A's id>","data":42}`
 
 ## 2. Spec
 

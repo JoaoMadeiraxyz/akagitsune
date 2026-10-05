@@ -13,8 +13,8 @@ Teste: `tests/gateway.rs:52` — `payload_is_relayed_verbatim_to_others`; `tests
 - **THEN** connection B receives `{"type":"message","from":"<A's id>","data":{"hp":42,"pos":[1,2],"nested":{"any":null}}}`
 
 #### Scenario: Payload bytes are kept exactly
-- **WHEN** connection A sends the text frame `{"b":1,  "a":[ 1,2 ],"u":"é","n":1.50}`
-- **THEN** connection B receives exactly the text `{"type":"message","from":"<A's id>","data":{"b":1,  "a":[ 1,2 ],"u":"é","n":1.50}}`
+- **WHEN** connection A sends the text frame `{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}`
+- **THEN** connection B receives exactly the text `{"type":"message","from":"<A's id>","data":{"b":1,  "a":[ 1,2 ],"u":"\u00e9","n":1.50}}`
 
 #### Scenario: Surrounding whitespace is dropped
 - **WHEN** connection A sends the text frame `  42  `

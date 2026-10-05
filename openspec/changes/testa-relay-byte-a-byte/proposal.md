@@ -2,7 +2,7 @@
 
 ## Why
 
-The hard rule "never deserialize the payload" is only checked by semantic equality. `payload_is_relayed_verbatim_to_others` (`tests/gateway.rs:52`) parses what B receives into a `serde_json::Value` and compares values, so a change that deserialized `data` and re-serialized it, reordering keys, normalizing `1.50` to `1.5` or rewriting `é`, would still pass. The requirement also does not say what happens to whitespace around the value, which the gateway does drop.
+The hard rule "never deserialize the payload" is only checked by semantic equality. `payload_is_relayed_verbatim_to_others` (`tests/gateway.rs:52`) parses what B receives into a `serde_json::Value` and compares values, so a change that deserialized `data` and re-serialized it, reordering keys, normalizing `1.50` to `1.5` or rewriting `\u00e9`, would still pass. The requirement also does not say what happens to whitespace around the value, which the gateway does drop.
 
 ## What Changes
 
