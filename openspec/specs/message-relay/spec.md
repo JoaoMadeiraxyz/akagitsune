@@ -37,7 +37,7 @@ Teste: `tests/gateway.rs:129` — `any_json_shape_is_accepted`.
 A text frame that is not valid JSON SHALL NOT be relayed. The gateway SHALL send the sender `{"type":"error","message":"text frames must contain valid JSON; use binary frames otherwise"}` and SHALL keep the connection open.
 
 Fonte: `src/ws.rs:100` — `handle_socket`; `src/ws.rs:22` — `INVALID_PAYLOAD`; `src/protocol.rs:11` — `ServerMessage`.
-Teste: `tests/gateway.rs:194` — `invalid_json_is_rejected_without_broadcasting`.
+Teste: `tests/gateway.rs:272` — `invalid_json_is_rejected_without_broadcasting`.
 
 #### Scenario: Invalid text produces an error and no broadcast
 - **WHEN** connection A sends the text frame `not json at all`
