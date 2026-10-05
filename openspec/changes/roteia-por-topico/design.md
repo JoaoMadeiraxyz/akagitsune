@@ -164,86 +164,28 @@ These are the guarantees a client can rely on, and each is a spec scenario.
 | Bounded everywhere | Kept. Queue of 256 per connection, at most 64 subscriptions per connection, topics of 255 bytes at most. The registry is bounded by `connections × 64` entries. |
 | No per-message logging | Kept. Drops are counted, not logged. Connect and disconnect log lines still report the lag total. |
 
-### 10. Harness: rebuilt for topics, not patched
+### 10. Harness: provided by `prepara-harness-para-topicos`
 
-The harness was designed around the global bus, and that assumption runs through every layer of it, not just one formula:
+The harness rebuild is its own change, `prepara-harness-para-topicos`, and it lands first. It brings:
+- expected deliveries per topic;
+- the `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement meters, each with a calibration case;
+- the `--binary` and `--churn` dimensions;
+- the topic scenarios, including `goal-1m-topics`;
+- the `incorrect` verdict.
 
-| Where | Global-bus assumption |
-|---|---|
-| `examples/loadgen.rs` — `expected` | Every published frame reaches every other connection: `sent × (established − 1)`. |
-| `examples/loadgen.rs` — `connect_one` | A connection is ready once it receives `welcome`. There is no subscribe step to wait for. |
-| `examples/loadgen.rs` — `write_loop` | It publishes the bare stamp `{"t":…,"s":…}` as the whole frame. |
-| `examples/loadgen.rs` — `read_loop` | It only knows `message`, `warning` and `error`, ignores binary frames, counts `warning` frames without adding up `dropped`, and has no notion of a frame arriving on the wrong topic. |
-| `examples/refserver.rs` | The reference routes through one broadcast bus with a source filter. Its injected loss is silent, with no `warning`. |
-| `scripts/calibrate.sh` | Every predicted value uses `CONNS − 1`. |
-| `scripts/bench.sh` | Scenarios are `connections senders rate payload seconds`. The verdict's `offered()` is `senders × rate × (conns − 1)`. Nothing in the CSV can show a routing error. |
+During the transition it keeps `--protocol legacy|topics`, with `legacy` as the default, so `main` stays measurable.
 
-After this change a run can be wrong in ways the old meters cannot see: a frame delivered to a non-subscriber, a frame lost without a `warning`, a subscriber missing from a topic. So the harness gains meters for those, and each meter gets a calibration case with a known answer.
+This change only switches the harness over:
 
-**`loadgen`**
+- `loadgen`, `refserver` and `bench.sh` default to `topics`.
+- The `legacy` protocol and its `null` rules are deleted, together with the `legacy` runs in `calibrate.sh`.
+- `scripts/calibrate.sh` must pass before any gateway number is recorded.
 
-- **Topology.**
-  - `--topics T` (default 1) puts connection `i` on topic `t-(i mod T)`. `connections` must be divisible by `T`.
-  - Sender `j` publishes to the topic of the connection it is, so it is a member of the topic it publishes to.
-  - Before the clock starts, every connection sends `subscribe` and waits for `subscribed`. A missing acknowledgement counts as `subscribe_failed`, and the connection is left out of the expected arithmetic.
-- **Expected deliveries.** For each topic, the frames sent to it × (its acknowledged members − 1). With every connection acknowledged, this reduces to `senders × rate × measured_seconds × (connections / T − 1)`, which is today's formula at `T = 1`.
-- **Publish.** `write_loop` sends `{"type":"publish","topic":…,"data":{stamp}}`. With `--binary`, it sends `[len][topic][stamp: two u64 little-endian][padding]` instead.
-- **Read.**
-  - `read_loop` decodes the envelope's `topic` and `data`, or the binary header, and drops neither path.
-  - Text is parsed with the same borrowed decoding as today, so the timing path is unchanged.
-- **New meters, all in `--json`:**
-  - `misrouted`: frames whose `topic` is not the receiver's. It must be 0.
-  - `dropped`: the sum of `dropped` over every `warning`.
-  - `unaccounted`: over the whole run (warmup included, since a `warning` carries no timestamp), expected − received − dropped. Thanks to the exact-count guarantee in `delivery-backpressure`, a non-zero value means frames vanished without a warning. It must be 0.
-  - `subscribe_ack_p50_ms` and `subscribe_ack_p99_ms`: the setup cost of the registry's copy-on-write joins, measured outside the clock.
-- **Churn.** `--churn N` opens `N` extra connections that, during the measured window, alternately subscribe to and unsubscribe from topic `t-0` at one operation per second each. Their receptions are excluded from expected deliveries. The steady members' delivery and latency show what membership churn costs a publish (`design.md` decision 2, *Risks*).
-- **Unit tests.** `cargo test --examples` covers the expected-delivery arithmetic for uneven acknowledgements, alongside the existing histogram tests.
-
-**`refserver`**
-
-- **Routing.** It speaks the new protocol, including acknowledgements and the binary header. Internally it keeps its single broadcast bus, and each connection filters by its own topic set.
-  - This deliberately stays different from the gateway's registry. A reference that copies the code under test cannot catch that code's bugs.
-  - It is slow at large `T`, which does not matter because it only runs calibration loads.
-- **New injected faults, each with a known answer:**
-  - `--warn-drops`: the existing 1-in-K loss is reported with `warning` frames.
-  - `--ignore-topics`: delivers every publish to every connection, as the old bus did.
-- **Existing faults.** Delay, silent loss and freeze keep their current behaviour.
-
-**`calibrate.sh`**
-
-The existing cases 1 to 4 run unchanged at `T = 1`, so their predicted answers (2,500 published, 497,500 delivered, 90% under loss, ≥ 497 ms freeze) must still hold. That proves the rebuild did not move the instrument. New cases:
-
-| Case | Setup | Predicted |
-|---|---|---|
-| 5 topics | 200 connections, `--topics 10`, 10 senders at 50/s, 10 s measured | 5,000 published, 95,000 delivered (5,000 × 19), 100%, `misrouted` 0, `unaccounted` 0 |
-| 6 misrouting meter | case 5 against `--ignore-topics` | every publish reaches all 199 other connections: 95,000 correctly routed and `misrouted` = 900,000 (5,000 × 180), which shows the meter detects leaks |
-| 7 silent loss | case 3 (1-in-10 loss, no warnings) | delivery 90%, `dropped` 0, `unaccounted` ≈ 10% of expected |
-| 8 reported loss | case 3 with `--warn-drops` | delivery 90%, `dropped` ≈ 10% of expected, `unaccounted` 0 |
-| 9 binary | case 1 with `--binary` | same counts as case 1 |
-| 10 churn exclusion | case 5 with `--churn 20` | steady members' delivery 100% and `unaccounted` 0, so churners are excluded correctly |
-
-**`bench.sh`**
-
-- **Scenario tuple:** `name connections topics senders rate payload seconds [flags]`. The existing scenarios keep their names and offered load at `topics = 1`.
-- **New scenarios:**
-
-  | Scenario | Invocation | Offered | What it shows |
-  |---|---|---|---|
-  | `topics-1k` | `--connections 1000 --topics 100 --senders 100 --rate 100` | 90 000 deliveries/s | Topic routing at moderate size. |
-  | `topics-5k` | `--connections 5000 --topics 500 --senders 500 --rate 100` | 450 000 deliveries/s | Same topic size, five times the connections: latency should stay flat if fanout is bounded by topic size. |
-  | `binary-200` | `fanout-200` with `--binary` | same as `fanout-200` | Cost of building the binary header once per publish. |
-  | `churn-500` | `fanout-500` with `--churn 100` | same as `fanout-500` | Membership churn under load. |
-  | `goal-1m-topics` (goal set) | `--connections 2100 --topics 100 --senders 100 --rate 500` | exactly 1 000 000 deliveries/s across 100 topics of 21 | The point of the change: the goal delivery rate with fanout bounded by topic size. |
-
-- **CSV:** gains `topics`, `binary`, `churn`, `subscribe_failed`, `subscribe_ack_p99_ms`, `misrouted`, `dropped` and `unaccounted`. The markdown table prints the full invocation.
-- **Verdict.** `offered()` becomes `senders × rate × (conns / topics − 1)`. A new verdict, `incorrect`, applies when `misrouted > 0`, `unaccounted > 0` or `subscribe_failed > 0`, and it overrides every other verdict: a fast run that routes wrongly is not a performance result.
-- **RSS per connection** divides by every open connection, churners included.
-
-**Sequencing.** The harness rebuild and its calibration only need `refserver`, so they land and pass `calibrate.sh` before the gateway code is measured. The new harness cannot drive the old gateway, because the protocols differ. So there is no same-harness before/after comparison of the gateway, which is one more reason the old rows stay historical only (decision 11).
+The first run of the real gateway under `topics` is the first time the harness's `topics` side meets something other than `refserver`. A disagreement there is investigated, not tolerated.
 
 ### 11. Existing benchmarks become invalid
 
-Every number in the *Measured baselines* table and the *Status* paragraph of `docs/architecture.md` was measured on the global-bus architecture, at commit `334cf1d` plus the harness rewrite. This change replaces the part that dominates those numbers:
+When this change starts, *Measured baselines* and *Status* in `docs/architecture.md` hold the global-bus numbers that `prepara-harness-para-topicos` re-measured with the new harness under `--protocol legacy`. This change replaces the part that dominates those numbers:
 
 - Fanout moves from one bridge task per receiver, fed by a 256-slot broadcast ring, to a single publisher task that does `try_reserve` into each subscriber's queue.
 - The task count per connection drops from three to two, which changes the per-connection RSS figure.
@@ -252,10 +194,10 @@ Every number in the *Measured baselines* table and the *Status* paragraph of `do
 
 Same invocation does not mean same system. After the implementation:
 
-- None of the existing rows is a baseline for the gateway, and none may be quoted as its current throughput, latency, RSS per connection or cliff. That includes the "~490 000 msg/s best clean baseline" and the 145 KiB/connection figure.
+- None of the global-bus rows is a baseline for the gateway. None may be quoted as its current throughput, latency, RSS per connection or cliff.
 - They are not deleted. They move to a subsection marked as the global-bus architecture, with their commit, as a record of where the project started.
 - New baselines come from a full `scripts/bench.sh --all` run on the new code, after `scripts/calibrate.sh` passes, recorded with hardware, profile, commit and invocation as the table already requires.
-- An old row next to a new one is a before/after illustration of this change. It is not evidence that a later change regressed or improved anything; later comparisons use only post-change baselines.
+- Both sets come from the same calibrated instrument, so for the `topics = 1` scenarios this change's PR can show a real before/after comparison. That comparison is the evidence for this change only. Later changes compare against post-change baselines.
 
 ### Extension points (not implemented)
 
@@ -270,7 +212,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
-## 11. Delivery is routed by topic; the global bus is gone
+## 12. Delivery is routed by topic; the global bus is gone
 
 **Context.** One global bus made fanout O(N²) and made targeted delivery impossible (entry 8). Topics need the client to say what it wants, which entry 4 had ruled out by having no client-to-server protocol.
 
@@ -280,7 +222,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
-## 12. The registry holds subscriber queues, read without locks
+## 13. The registry holds subscriber queues, read without locks
 
 **Context.** Routing needs topic → subscribers, which is the first shared state beyond the connection counter (entry 6 anticipated a registry). A lock on the publish path would serialize every publisher.
 
@@ -290,7 +232,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
-## 13. Backpressure is per receiver queue
+## 14. Backpressure is per receiver queue
 
 **Context.** Without the bus there is no `Lagged(n)`. The receiver's queue becomes the only buffer.
 
@@ -300,7 +242,7 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ---
 
-## 14. Binary frames carry a topic header
+## 15. Binary frames carry a topic header
 
 **Context.** Binary frames had no envelope (entry 3), so they could neither name a topic nor tell a receiver who sent them.
 
@@ -312,11 +254,10 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 
 ## Risks / Trade-offs
 
-- **Breaking every client.** This is accepted and recorded in entry 11. The README protocol section is rewritten as the reference.
+- **Breaking every client.** This is accepted and recorded in entry 12. The README protocol section is rewritten as the reference.
 - **New dependency on the hot path.** `papaya` correctness under concurrent compute and remove is load-bearing. Mitigation: integration tests that subscribe and unsubscribe concurrently with publishing, and a bench run.
 - **Fanout concentrated in one task.** A single very large topic adds latency proportional to its size for its last subscriber (decision 3). The bench row `goal-1m-fanout` at `T = 1` measures the worst case directly.
 - **Unsubscribe window.** Frames in flight can arrive after `unsubscribed`. This is documented, and the spec scenario allows it.
 - **Membership churn on huge topics** is quadratic. It is recorded as a scalability limit and not addressed.
 - **Stale performance claims.** Until the new baselines are recorded, `docs/architecture.md` has no valid gateway numbers. Any claim made from the old rows in that window is wrong. Mitigation: the documentation and bench tasks land in the same PR as the code (decision 11).
-- **Harness drift.** If `loadgen` and `refserver` disagree on the protocol, calibration fails. `scripts/calibrate.sh` must pass before any number is published.
-- **A harness that measures the wrong thing.** A rebuilt harness could report clean numbers while routing is broken. Mitigation: the `misrouted`, `unaccounted` and `subscribe_failed` meters, each proven by a calibration case with a known answer, and the `incorrect` verdict that overrides every other verdict (decision 10).
+- **Harness drift.** The `topics` side of the harness was calibrated only against `refserver`. If it and the gateway disagree on the protocol, calibration still passes but the gateway run fails or misroutes. Mitigation: the `incorrect` verdict, and investigating the first gateway run instead of tolerating it (decision 10).

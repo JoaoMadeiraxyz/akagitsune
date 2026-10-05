@@ -33,11 +33,7 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
   - at most 64 subscriptions per connection.
 - Backpressure moves from the bus to each connection's outgoing queue of 256 frames. A full queue drops the frame for that receiver only, and the receiver is told with the same `{"type":"warning","dropped":n}` frame, placed exactly where the gap is.
 - Each connection runs two tasks (reader, writer) instead of three. The bridge task disappears.
-- The load harness is rebuilt, not patched. Every layer was designed around the global bus: `loadgen`'s expected deliveries (`sent × (connections − 1)`), its setup and frame format, `refserver`'s routing, every predicted value in `calibrate.sh`, and `bench.sh`'s scenarios and verdict.
-  - **New dimensions:** topics, binary publishing and membership churn.
-  - **New correctness meters:** `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement latency. Each one is proven by a new calibration case with a known answer.
-  - **New verdict:** `incorrect`, which overrides any result where routing was wrong.
-  - **New scenarios:** topic-partitioned scenarios, including `goal-1m-topics`.
+- The benchmark harness switches to the topic protocol. The rebuild itself (per-topic expectations, correctness meters, topic scenarios, `goal-1m-topics`) is the separate change `prepara-harness-para-topicos`, which lands first and keeps a temporary `legacy` protocol. This change makes `topics` the default and deletes `legacy`.
 - Documentation is updated to match: `README.md`, `docs/architecture.md`, `docs/decisions.md`, `CLAUDE.md`, `openspec/config.yaml` and the `gateway-review` and `perf-check` skills.
 
 ## Capabilities
@@ -63,5 +59,6 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
 - **Tests:** every test in `tests/gateway.rs` that relies on the global bus is rewritten to subscribe first, and new tests cover each `topic-routing` scenario.
 - **Clients:** all existing clients break. There are no known external consumers. The README protocol section is the migration guide.
 - **Performance:** the hot path changes, so the implementation PR carries a manual benchmark run.
-- **Existing benchmarks become invalid.** Every baseline and the goal status in `docs/architecture.md` were measured on the global-bus architecture. This change replaces exactly the part that dominates fanout: the bus, the bridge task per receiver and the lag mechanism. After implementation those rows describe a system that no longer exists. They move to a section marked as the old architecture, and new baselines are measured from scratch with `scripts/bench.sh --all` (`design.md` decision 11).
+- **Existing benchmarks become invalid.** By the time this change starts, the global-bus numbers in `docs/architecture.md` will have been re-measured by `prepara-harness-para-topicos` with the new harness. This change replaces exactly the part that dominates fanout: the bus, the bridge task per receiver and the lag mechanism. After implementation those rows describe a system that no longer exists. They move to a section marked as the old architecture, and new baselines are measured from scratch with `scripts/bench.sh --all`. Both sets come from the same instrument, so the PR can show a real before/after comparison (`design.md` decision 11).
+- **Depends on** `prepara-harness-para-topicos` being merged first.
 - **Out of scope:** presence, direct delivery by connection id, wildcard or predicate subscriptions, a backplane, and authorization of who may subscribe. The design keeps each one as an extension of the registry (see `design.md`). None is implemented here.

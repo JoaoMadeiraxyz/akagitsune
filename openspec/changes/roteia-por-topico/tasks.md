@@ -30,60 +30,25 @@
 
 ## 5. Harness
 
-The harness can land before section 3, because it only needs `refserver`. See `design.md` decision 10.
+This section requires `prepara-harness-para-topicos` to be merged (see `design.md` decision 10).
 
-- [ ] 5.1 `examples/loadgen.rs`, topology:
-  - add `--topics T`, with connection `i` on `t-(i mod T)`, rejecting `connections % T != 0`;
-  - make each sender publish to its own topic;
-  - subscribe and await `subscribed` before the clock, counting `subscribe_failed`;
-  - compute expected deliveries per topic from the acknowledged members, replacing `sent × (established − 1)`
-- [ ] 5.2 `examples/loadgen.rs`, wire format:
-  - publish `{"type":"publish","topic":…,"data":{stamp}}`;
-  - add `--binary`, sending `[len][topic][stamp][padding]`;
-  - read the envelope's `topic` and the binary header on the receive path without building a `Value`
-- [ ] 5.3 `examples/loadgen.rs`, meters:
-  - add `misrouted`, `dropped` (the sum of every `warning.dropped`), `unaccounted` (whole-run expected − received − dropped), and `subscribe_ack_p50_ms` / `subscribe_ack_p99_ms`;
-  - add all of them to `--json`;
-  - extend `USAGE` to describe them
-- [ ] 5.4 `examples/loadgen.rs`, churn: add `--churn N`, with `N` extra connections alternating subscribe/unsubscribe on `t-0` once per second during the measured window, excluded from the expected deliveries
-- [ ] 5.5 `examples/loadgen.rs`: add unit tests for the expected-delivery arithmetic, including uneven acknowledgements and the `T = 1` reduction to the old formula (`cargo test --examples`)
-- [ ] 5.6 `examples/refserver.rs`:
-  - speak the new protocol, including acknowledgements and the binary header, keeping its single broadcast bus with a per-connection topic filter so it stays independent from the gateway's registry;
-  - add `--warn-drops` and `--ignore-topics`;
-  - keep delay, silent loss and freeze unchanged
-- [ ] 5.7 `scripts/calibrate.sh`: keep cases 1–4 at `T = 1` with their current predicted answers, and add cases 5–10 from `design.md` decision 10 (topics, the misrouting meter, silent loss, reported loss, binary, churn exclusion). Every predicted value must come from arithmetic
-- [ ] 5.8 `scripts/bench.sh`:
-  - change the scenario tuple to `name connections topics senders rate payload seconds [flags]`;
-  - add the `topics`, `binary`, `churn`, `subscribe_failed`, `subscribe_ack_p99_ms`, `misrouted`, `dropped` and `unaccounted` columns;
-  - change `offered()` to `senders × rate × (conns / topics − 1)`;
-  - add the `incorrect` verdict, which overrides every other verdict;
-  - compute RSS per connection over every open connection;
-  - print the full invocation in the markdown table
-- [ ] 5.9 `scripts/bench.sh`: add the `topics-1k`, `topics-5k`, `binary-200` and `churn-500` scenarios to the baseline sweep and `goal-1m-topics` to the goal set, with the invocations from `design.md` decision 10
-- [ ] 5.10 Run `scripts/calibrate.sh` and get every case green before section 3 is measured. If a case fails, fix the harness rather than widen a tolerance
+- [ ] 5.1 Make `topics` the default protocol in `examples/loadgen.rs`, `examples/refserver.rs` and `scripts/bench.sh`. Delete the `legacy` protocol, its `null` rules and its runs in `scripts/calibrate.sh`
+- [ ] 5.2 Run `scripts/calibrate.sh` and get every case green before measuring the gateway. If a case fails, fix the harness rather than widen a tolerance
 
 ## 6. Documentation
 
 - [ ] 6.1 `README.md`: rewrite the Protocol section (subscribe, unsubscribe, publish, envelope with `topic`, binary header in and out, limits, the unsubscribe window). Update Layout with `src/registry.rs`, change "three tasks" to two, and remove topic routing from "Not implemented yet"
 - [ ] 6.2 `docs/architecture.md`: update the lifecycle, the task table, the message flow diagram, hot-path invariants (payload rule wording, shared state now includes the lock-free registry), backpressure (queue instead of `Lagged`), the scalability table (fanout O(topic size), membership churn cost, single-task fanout per publish) and "What would have to change"
-- [ ] 6.3 `docs/architecture.md`: move every existing *Measured baselines* row and the *Status* figures into a subsection titled as the global-bus architecture, with commit `334cf1d`. Then record the new baselines from task 7.2 in the main table and rewrite *Status*. The per-connection RSS and the cliff reading are re-derived from the new rows, not carried over
-- [ ] 6.4 `docs/decisions.md`: append entries 11–14 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
+- [ ] 6.3 `docs/architecture.md`: move the global-bus *Measured baselines* rows (the `--protocol legacy` rows recorded by `prepara-harness-para-topicos`) and the *Status* figures into a subsection titled as the global-bus architecture, with their commit. Then record the new baselines from task 7.2 in the main table and rewrite *Status*. The per-connection RSS and the cliff reading are re-derived from the new rows, not carried over
+- [ ] 6.4 `docs/decisions.md`: append entries 12–15 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
 - [ ] 6.5 `CLAUDE.md`: reword the payload hard rule (the control frame is parsed, `data` stays `&RawValue`) and the no-locks rule (shared state is the `AtomicUsize` and the lock-free registry), and add `src/registry.rs` to Layout
 - [ ] 6.6 `openspec/config.yaml`: update the service description (topic routing instead of a single global bus) and the code map
-- [ ] 6.7 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`. In `perf-check`, update *Reading the output* and *Methodology*:
-  - the delivery formula with topics;
-  - `warning` as a full subscriber queue;
-  - the `misrouted`, `dropped`, `unaccounted` and `subscribe_ack` meters;
-  - the `incorrect` verdict;
-  - the new scenarios
-- [ ] 6.8 `docs/architecture.md`, *Performance goal* and *Harness calibration*:
-  - generalize the definition of a delivery to `senders × rate × (connections / topics − 1)`;
-  - add `goal-1m-topics` to the goal table;
-  - add calibration cases 5–10 with their predicted and measured values
+- [ ] 6.7 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`. In `perf-check`, describe `warning` as a full subscriber queue and remove every mention of `--protocol legacy`
+- [ ] 6.8 `docs/architecture.md`, *Performance goal*: add `goal-1m-topics` to the goal scenario table, and remove any mention of the `legacy` protocol
 
 ## 7. Verify
 
 - [ ] 7.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `openspec validate --all --strict` locally before opening the PR
-- [ ] 7.2 Author runs `scripts/calibrate.sh` and then `scripts/bench.sh --all` locally on the new code, and puts the table in the PR, including `goal-1m-topics`. Old rows may appear only as a labelled before/after illustration, not as the baseline. CI does not measure performance
+- [ ] 7.2 Author runs `scripts/calibrate.sh` and then `scripts/bench.sh --all` locally on the new code, and puts the table in the PR, including `goal-1m-topics`, next to the global-bus rows for the same `topics = 1` scenarios as the before/after of this change. CI does not measure performance
 - [ ] 7.3 CI runs fmt, clippy and `cargo test` on the PR. `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 7.4 An independent session fills `verificacao.md`: each requirement against its code and test with `path:line` evidence, each hot-path invariant from `design.md` decision 9 checked in the diff, and a grep of the diff for domain vocabulary and code comments
