@@ -121,7 +121,10 @@ The project target is a single process sustaining:
 
 A *delivery* is one framed message received by one subscriber — the same unit
 `loadgen` reports as throughput. On a clean run that equals
-`senders × rate × (connections − 1)`.
+`senders × rate × (connections / topics − 1)`, which is
+`senders × rate × (connections − 1)` on today's single bus (`topics = 1`).
+Frames on the extra quiet topic (`--extra-topic-rate`) are reported apart and
+are not deliveries in this sense.
 
 The goal is **sustained offered load within SLO**, not the peak number printed
 while consumers are lagging. A cliff row that shows multi-million msg/s with

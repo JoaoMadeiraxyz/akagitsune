@@ -132,11 +132,14 @@ scripts/bench.sh             # baseline sweep, writes bench-results/<timestamp>.
 scripts/bench.sh --goal      # 1M goal + stretch scenarios and a pass/miss verdict
 scripts/bench.sh --all       # baseline + goal + stretch, with verdict
 scripts/calibrate.sh         # harness self-check against a known answer
+scripts/bench.sh --all --protocol topics   # the same sweep against topic routing
 ```
 
-`bench.sh` refuses to produce numbers if the calibration fails. See
-`docs/architecture.md` for the performance goal, current baselines, and how to
-read them.
+`bench.sh` refuses to produce numbers if the calibration fails.
+`--protocol legacy` (the default) drives today's gateway; `--protocol topics`
+drives topic routing, and scenarios that need topics are skipped under
+`legacy`. See `docs/architecture.md` for the performance goal, current
+baselines, and how to read them.
 
 ## Not implemented yet
 
