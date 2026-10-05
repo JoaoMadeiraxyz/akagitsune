@@ -168,9 +168,25 @@ These are the guarantees a client can rely on, and each is a spec scenario.
 
 - `loadgen` gains `--topics T` (default 1). Connections are split evenly across `T` topics, and `connections` must be divisible by `T`. Senders are assigned round-robin to topics.
 - Every connection subscribes and waits for `subscribed` before the clock starts.
-- Offered deliveries become `senders × rate × (connections / T − 1)`. With `T = 1` this is today's formula, so the existing baseline and goal rows remain comparable.
-- `refserver` speaks the same protocol, with one topic map and the same injected delay, loss and freeze. The calibration answers in `docs/architecture.md` therefore stay valid at `T = 1`.
+- Offered deliveries become `senders × rate × (connections / T − 1)`. With `T = 1` this is today's formula, so the scenario invocations keep producing the same offered load. The measured numbers do not carry over (see *Existing benchmarks become invalid* below).
+- `refserver` speaks the same protocol, with one topic map and the same injected delay, loss and freeze. The calibration answers in `docs/architecture.md` therefore stay valid at `T = 1`. They describe the harness against a reference server, not the gateway.
 - `bench.sh` adds a `topics` column and a scenario `goal-1m-topics`: `--connections 2100 --topics 100 --senders 100 --rate 500`, with exactly 1 000 000 offered deliveries/s across 100 topics of 21. This row shows the point of the change: the same delivery rate with fanout bounded by topic size.
+
+### 11. Existing benchmarks become invalid
+
+Every number in the *Measured baselines* table and the *Status* paragraph of `docs/architecture.md` was measured on the global-bus architecture, at commit `334cf1d` plus the harness rewrite. This change replaces the part that dominates those numbers:
+
+- Fanout moves from one bridge task per receiver, fed by a 256-slot broadcast ring, to a single publisher task that does `try_reserve` into each subscriber's queue.
+- The task count per connection drops from three to two, which changes the per-connection RSS figure.
+- Lag is triggered by a full per-connection queue instead of the bus position, so the cliff behaves differently.
+- Every frame now carries a control wrapper and a `topic`, so the bytes per delivery change too.
+
+Same invocation does not mean same system. After the implementation:
+
+- None of the existing rows is a baseline for the gateway, and none may be quoted as its current throughput, latency, RSS per connection or cliff. That includes the "~490 000 msg/s best clean baseline" and the 145 KiB/connection figure.
+- They are not deleted. They move to a subsection marked as the global-bus architecture, with their commit, as a record of where the project started.
+- New baselines come from a full `scripts/bench.sh --all` run on the new code, after `scripts/calibrate.sh` passes, recorded with hardware, profile, commit and invocation as the table already requires.
+- An old row next to a new one is a before/after illustration of this change. It is not evidence that a later change regressed or improved anything; later comparisons use only post-change baselines.
 
 ### Extension points (not implemented)
 
@@ -232,4 +248,5 @@ Appended by the implementation PR. Entries 3, 4 and 8 are not edited. Each new e
 - **Fanout concentrated in one task.** A single very large topic adds latency proportional to its size for its last subscriber (decision 3). The bench row `goal-1m-fanout` at `T = 1` measures the worst case directly.
 - **Unsubscribe window.** Frames in flight can arrive after `unsubscribed`. This is documented, and the spec scenario allows it.
 - **Membership churn on huge topics** is quadratic. It is recorded as a scalability limit and not addressed.
+- **Stale performance claims.** Until the new baselines are recorded, `docs/architecture.md` has no valid gateway numbers. Any claim made from the old rows in that window is wrong. Mitigation: the documentation and bench tasks land in the same PR as the code (decision 11).
 - **Harness drift.** If `loadgen` and `refserver` disagree on the protocol, calibration fails. `scripts/calibrate.sh` must pass before any number is published.

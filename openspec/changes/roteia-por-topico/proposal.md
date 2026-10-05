@@ -58,5 +58,6 @@ Vocabulary: the only new noun is `topic`. No `room`, `channel name` or other dom
 - **Dependencies:** one new crate for a lock-free concurrent map (`papaya`, see `design.md`).
 - **Tests:** every test in `tests/gateway.rs` that relies on the global bus is rewritten to subscribe first, and new tests cover each `topic-routing` scenario.
 - **Clients:** all existing clients break. There are no known external consumers. The README protocol section is the migration guide.
-- **Performance:** the hot path changes, so the implementation PR carries a manual `scripts/bench.sh --goal` run.
+- **Performance:** the hot path changes, so the implementation PR carries a manual benchmark run.
+- **Existing benchmarks become invalid.** Every baseline and the goal status in `docs/architecture.md` were measured on the global-bus architecture. This change replaces exactly the part that dominates fanout: the bus, the bridge task per receiver and the lag mechanism. After implementation those rows describe a system that no longer exists. They move to a section marked as the old architecture, and new baselines are measured from scratch with `scripts/bench.sh --all` (`design.md` decision 11).
 - **Out of scope:** presence, direct delivery by connection id, wildcard or predicate subscriptions, a backplane, and authorization of who may subscribe. The design keeps each one as an extension of the registry (see `design.md`). None is implemented here.

@@ -38,14 +38,15 @@
 
 - [ ] 6.1 `README.md`: rewrite the Protocol section (subscribe, unsubscribe, publish, envelope with `topic`, binary header in and out, limits, the unsubscribe window). Update Layout with `src/registry.rs`, change "three tasks" to two, and remove topic routing from "Not implemented yet"
 - [ ] 6.2 `docs/architecture.md`: update the lifecycle, the task table, the message flow diagram, hot-path invariants (payload rule wording, shared state now includes the lock-free registry), backpressure (queue instead of `Lagged`), the scalability table (fanout O(topic size), membership churn cost, single-task fanout per publish) and "What would have to change"
-- [ ] 6.3 `docs/decisions.md`: append entries 11–14 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
-- [ ] 6.4 `CLAUDE.md`: reword the payload hard rule (the control frame is parsed, `data` stays `&RawValue`) and the no-locks rule (shared state is the `AtomicUsize` and the lock-free registry), and add `src/registry.rs` to Layout
-- [ ] 6.5 `openspec/config.yaml`: update the service description (topic routing instead of a single global bus) and the code map
-- [ ] 6.6 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`
+- [ ] 6.3 `docs/architecture.md`: move every existing *Measured baselines* row and the *Status* figures into a subsection titled as the global-bus architecture, with commit `334cf1d`. Then record the new baselines from task 7.2 in the main table and rewrite *Status*. The per-connection RSS and the cliff reading are re-derived from the new rows, not carried over
+- [ ] 6.4 `docs/decisions.md`: append entries 11–14 from `design.md` verbatim, without editing entries 3, 4, 7 or 8
+- [ ] 6.5 `CLAUDE.md`: reword the payload hard rule (the control frame is parsed, `data` stays `&RawValue`) and the no-locks rule (shared state is the `AtomicUsize` and the lock-free registry), and add `src/registry.rs` to Layout
+- [ ] 6.6 `openspec/config.yaml`: update the service description (topic routing instead of a single global bus) and the code map
+- [ ] 6.7 `.claude/skills/gateway-review/SKILL.md` and `.claude/skills/perf-check/SKILL.md`: replace the bridge, `BroadcastMessage` and `BROADCAST_CAPACITY` references with the registry, fanout and `SUBSCRIBER_QUEUE_CAPACITY`
 
 ## 7. Verify
 
 - [ ] 7.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `openspec validate --all --strict` locally before opening the PR
-- [ ] 7.2 Author runs `scripts/calibrate.sh` and then `scripts/bench.sh --goal` locally, and puts the table in the PR: `goal-1m-*` rows at `topics = 1` compared with the last baseline, plus `goal-1m-topics`. CI does not measure performance
+- [ ] 7.2 Author runs `scripts/calibrate.sh` and then `scripts/bench.sh --all` locally on the new code, and puts the table in the PR, including `goal-1m-topics`. Old rows may appear only as a labelled before/after illustration, not as the baseline. CI does not measure performance
 - [ ] 7.3 CI runs fmt, clippy and `cargo test` on the PR. `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 7.4 An independent session fills `verificacao.md`: each requirement against its code and test with `path:line` evidence, each hot-path invariant from `design.md` decision 9 checked in the diff, and a grep of the diff for domain vocabulary and code comments
