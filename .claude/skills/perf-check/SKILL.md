@@ -109,9 +109,11 @@ cargo run --release --example loadgen -- \
 - **Compare the CPU columns.** If `loadgen_cpu_pct` dwarfs `gateway_cpu_pct`,
   the harness saturated first and you measured the harness. The previous
   `loadgen` did exactly that on `cliff-300`: it created a timer per received
-  frame, burned 1068% CPU, and manufactured a cliff the gateway does not have
-  (see *Superseded* in `docs/architecture.md`). Calibration runs at low load
-  and cannot catch that kind of cost, so the CPU columns are the check.
+  frame, burned 1068% CPU, and lost about 28% of the frames on every run, a cliff
+  that was the harness (see *Superseded* in `docs/architecture.md`). The current
+  `loadgen` is clean there on a lightly loaded machine but still shows warnings
+  when the machine is heavily loaded, so quote `cliff-300` with the load. Calibration runs at low
+  load and cannot catch that kind of cost, so the CPU columns are the check.
 
 ## Methodology
 
