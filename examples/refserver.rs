@@ -40,6 +40,15 @@ OPTIONS:
     --drop-1-in <K>        discard every Kth delivery per subscriber  [default: 0]
     --warn-drops           report each discarded delivery with a warning frame
     --ignore-topics        topics only: deliver every publish to every connection
+    --drop-subscribe-acks <K>    topics only: withhold every Kth subscribed reply,
+                                 counted across all connections  [default: 0]
+    --drop-unsubscribe-acks <K>  topics only: withhold every Kth unsubscribed reply,
+                                 counted across all connections  [default: 0]
+
+Under topics, a connection that falls behind the internal bus aborts the
+process: the bus carries every topic, so its lag count cannot say how many of
+the skipped frames were meant for that connection, and a reference that
+reported a wrong count would be worse than one that stops.
     --stall-at <S>         seconds after startup at which to freeze  [default: 0]
     --stall-ms <M>         how long the freeze lasts; 0 disables  [default: 0]
     --help                 show this message
@@ -63,6 +72,8 @@ struct Behaviour {
     drop_1_in: u64,
     warn_drops: bool,
     ignore_topics: bool,
+    drop_subscribe_acks: u64,
+    drop_unsubscribe_acks: u64,
     stall_from: Option<Instant>,
     stall_until: Option<Instant>,
 }
@@ -108,6 +119,8 @@ struct ClientFrame<'a> {
 struct RefState {
     tx: broadcast::Sender<Fanout>,
     delivered: Arc<AtomicU64>,
+    subscribe_acks: AtomicU64,
+    unsubscribe_acks: AtomicU64,
     behaviour: Behaviour,
 }
 
@@ -189,17 +202,25 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
             let fanout = tokio::select! {
                 biased;
                 Some(change) = change_rx.recv() => {
-                    let reply = match change {
+                    let (reply, counter, every) = match change {
                         Change::Subscribe(topic) => {
                             let reply = ack("subscribed", &topic);
                             topics.insert(topic);
-                            reply
+                            (reply, &bridge_state.subscribe_acks, behaviour.drop_subscribe_acks)
                         }
                         Change::Unsubscribe(topic) => {
                             topics.remove(&topic);
-                            ack("unsubscribed", &topic)
+                            (
+                                ack("unsubscribed", &topic),
+                                &bridge_state.unsubscribe_acks,
+                                behaviour.drop_unsubscribe_acks,
+                            )
                         }
                     };
+                    let nth = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if every > 0 && nth.is_multiple_of(every) {
+                        continue;
+                    }
                     if queue_tx.send((Instant::now(), reply)).await.is_err() {
                         return;
                     }
@@ -209,6 +230,13 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                     Ok(fanout) if fanout.source == id => continue,
                     Ok(fanout) => fanout,
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
+                        if behaviour.protocol == Protocol::Topics {
+                            eprintln!(
+                                "refserver: a connection fell {dropped} frames behind the internal bus; \
+                                 the calibration load is too high for this reference"
+                            );
+                            std::process::exit(3);
+                        }
                         if queue_tx.send((Instant::now(), warning(dropped))).await.is_err() {
                             return;
                         }
@@ -364,6 +392,8 @@ async fn main() -> std::io::Result<()> {
     let switch = |name: &str| std::env::args().any(|a| a == name);
     let warn_drops = switch("--warn-drops");
     let ignore_topics = switch("--ignore-topics");
+    let drop_subscribe_acks: u64 = flag("--drop-subscribe-acks", 0);
+    let drop_unsubscribe_acks: u64 = flag("--drop-unsubscribe-acks", 0);
     let delay_ms: u64 = flag("--delay-ms", 0);
     let drop_1_in: u64 = flag("--drop-1-in", 0);
     let stall_at: u64 = flag("--stall-at", 0);
@@ -378,12 +408,16 @@ async fn main() -> std::io::Result<()> {
     let state = Arc::new(RefState {
         tx,
         delivered: Arc::clone(&delivered),
+        subscribe_acks: AtomicU64::new(0),
+        unsubscribe_acks: AtomicU64::new(0),
         behaviour: Behaviour {
             protocol,
             delay: Duration::from_millis(delay_ms),
             drop_1_in,
             warn_drops,
             ignore_topics,
+            drop_subscribe_acks,
+            drop_unsubscribe_acks,
             stall_from,
             stall_until,
         },
