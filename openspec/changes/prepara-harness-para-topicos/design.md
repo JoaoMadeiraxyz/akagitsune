@@ -89,7 +89,9 @@ With topics, a run can be wrong in ways the old meters cannot see: a frame deliv
 
 **`calibrate.sh`**
 
-The existing cases 1 to 4 run under both protocols at `T = 1` with their current predicted answers (2,500 published, 497,500 delivered, 90% under loss, ≥ 497 ms freeze). Holding them proves the rebuild did not move the instrument. Cases 7–9, 11 and 12 also run under both protocols. Cases 5, 6, 10, 13, 14 and 15 are `topics` only. New cases:
+The existing cases 1 to 4 run under both protocols at `T = 1` with their current predicted answers (2,500 published, 497,500 delivered, 90% under loss, ≥ 497 ms freeze). Holding them proves the rebuild did not move the instrument. Case 2 is the exception: it no longer checks `service p50 = 50 ± 2 ms`.
+- **What it checks now:** it runs once without delay to measure the floor, then with `--delay-ms 50`. The `refserver` reports the time it actually held each frame (`hold_p50_ms`, `hold_p99_ms`), and the check is `service p50 − (floor p50 + hold p50) = 0 ± 1 ms`, plus the same for p99 at ± 5 ms.
+- **Why it changed:** on 2026-10-06 a 50 ms `tokio::time::sleep_until` measured 50.5–57.0 ms on the calibration machine (p50 54.7 ms in an isolated test, 51.2 ms inside the `refserver`). The old absolute check therefore failed with both the old and the new harness. It was measuring the operating system's timer overshoot, not whether `loadgen` reports what the server did. Cases 7–9, 11 and 12 also run under both protocols. Cases 5, 6, 10, 13, 14 and 15 are `topics` only. New cases:
 
 | Case | Setup | Predicted |
 |---|---|---|

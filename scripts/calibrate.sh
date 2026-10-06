@@ -67,6 +67,10 @@ ref_deliveries() {
     awk '/^deliveries /{n=$2} END{print n+0}' "$WORK/ref-$1.log"
 }
 
+ref_stat() {
+    awk -v key="$2" '$1 == key {n=$2} END{print (n == "" ? "null" : n)}' "$WORK/ref-$1.log"
+}
+
 loadgen() {
     local port=$1
     shift
@@ -167,18 +171,31 @@ for PROTO in legacy topics; do
     assert "case9 malformed frames" 0 "$(json_field "$CASE9" malformed)" 0 abs
     assert "case9 unaccounted" 0 "$(json_field "$CASE9" unaccounted)" 0 abs
 
-    start_case "case 2: known 50ms delivery delay, low load so the timer is not the bottleneck"
+    start_case "case 2: known 50ms delivery delay, checked against what the server actually held"
     PORT=3102
+    start_ref "$PORT"
+    CASE2_FLOOR=$(loadgen "$PORT" --connections 20 --senders 1 --rate 20 --seconds 12 --warmup 2)
+    stop_ref
+    PORT=3122
     start_ref "$PORT" --delay-ms 50
     CASE2=$(loadgen "$PORT" --connections 20 --senders 1 --rate 20 --seconds 12 --warmup 2)
     stop_ref
 
-    assert "case2 service p50 ms" 50 "$(json_field "$CASE2" service_p50_ms)" 2 abs
-    assert "case2 service p99 ms" 50 "$(json_field "$CASE2" service_p99_ms)" 5 abs
+    FLOOR_P50=$(json_field "$CASE2_FLOOR" service_p50_ms)
+    FLOOR_P99=$(json_field "$CASE2_FLOOR" service_p99_ms)
+    HOLD_P50=$(ref_stat "$PORT" hold_p50_ms)
+    HOLD_P99=$(ref_stat "$PORT" hold_p99_ms)
+    assert "case2 server hold p50 >= requested 50 ms" 50 "$HOLD_P50" 0 min
+    assert "case2 service p50 - (floor + hold) ms" 0 \
+        "$(awk -v p="$(json_field "$CASE2" service_p50_ms)" -v f="$FLOOR_P50" -v h="$HOLD_P50" 'BEGIN{printf "%.3f", p - f - h}')" 1 abs
+    assert "case2 service p99 - (floor + hold) ms" 0 \
+        "$(awk -v p="$(json_field "$CASE2" service_p99_ms)" -v f="$FLOOR_P99" -v h="$HOLD_P99" 'BEGIN{printf "%.3f", p - f - h}')" 5 abs
     assert "case2 delivery %" 100 "$(json_field "$CASE2" delivery_pct)" 0.01 abs
     assert "case2 warnings" 0 "$(json_field "$CASE2" warnings)" 0 abs
-    note "case2 measurement overhead ms" \
-        "$(awk -v p="$(json_field "$CASE2" service_p50_ms)" 'BEGIN{printf "%.3f", p - 50}')"
+    note "case2 measurement floor p50 ms" "$FLOOR_P50"
+    note "case2 server hold p50 ms" "$HOLD_P50"
+    note "case2 server hold p99 ms" "$HOLD_P99"
+    note "case2 service p50 ms" "$(json_field "$CASE2" service_p50_ms)"
     note "case2 response p50 ms" "$(json_field "$CASE2" response_p50_ms)"
 
     start_case "cases 3 and 7: known silent loss, one delivery in ten discarded"

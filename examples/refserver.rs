@@ -58,7 +58,9 @@ publishers the way a real overloaded server does.
 
 Cumulative deliveries are printed to stderr once a second as
 `deliveries <n>`; the last line is the server's own count, independent of the
-client's.";
+client's. With --delay-ms, the time each delivery was actually held (the OS
+timer can overshoot the requested delay) is printed as `hold_p50_ms` and
+`hold_p99_ms`, so calibration compares the client against what the server did.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Protocol {
@@ -119,6 +121,7 @@ struct ClientFrame<'a> {
 struct RefState {
     tx: broadcast::Sender<Fanout>,
     delivered: Arc<AtomicU64>,
+    holds: std::sync::Mutex<Vec<u32>>,
     subscribe_acks: AtomicU64,
     unsubscribe_acks: AtomicU64,
     behaviour: Behaviour,
@@ -280,6 +283,10 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
 
             if !behaviour.delay.is_zero() {
                 sleep_until(TokioInstant::from_std(arrival + behaviour.delay)).await;
+                let held = arrival.elapsed().as_micros() as u32;
+                if let Ok(mut holds) = writer_state.holds.lock() {
+                    holds.push(held);
+                }
             }
 
             if sink.send(frame).await.is_err() {
@@ -408,6 +415,7 @@ async fn main() -> std::io::Result<()> {
     let state = Arc::new(RefState {
         tx,
         delivered: Arc::clone(&delivered),
+        holds: std::sync::Mutex::new(Vec::new()),
         subscribe_acks: AtomicU64::new(0),
         unsubscribe_acks: AtomicU64::new(0),
         behaviour: Behaviour {
@@ -424,11 +432,23 @@ async fn main() -> std::io::Result<()> {
     });
 
     let counter = Arc::clone(&delivered);
+    let stats_state = Arc::clone(&state);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
             ticker.tick().await;
             eprintln!("deliveries {}", counter.load(Ordering::Relaxed));
+            let mut holds = match stats_state.holds.lock() {
+                Ok(holds) => holds.clone(),
+                Err(_) => continue,
+            };
+            if holds.is_empty() {
+                continue;
+            }
+            holds.sort_unstable();
+            let at = |p: f64| holds[((holds.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
+            eprintln!("hold_p50_ms {:.3}", at(0.50));
+            eprintln!("hold_p99_ms {:.3}", at(0.99));
         }
     });
 
