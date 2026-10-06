@@ -133,25 +133,27 @@ delivery well below 99.9% does not count. The latency bar is **service p99**
 
 ### Status
 
-**Met on the current gateway, with margin.** Measured on 2026-10-06 with the
-rebuilt, calibrated harness (`--protocol legacy`, machine and conditions under
-*Measured baselines*):
+**Met on the current gateway.** Measured at `0bc858b` with the calibrated
+harness (`--protocol legacy`, machine and conditions under *Measured
+baselines*):
 
 - **All three goal scenarios pass:** `goal-1m-fanout`, `goal-1m-ingest` and
   `goal-1m-mesh` sustain 1 000 000 deliveries/s at 100% delivery, zero
-  warnings, and a service p99 of 6.4–8.9 ms.
-- **All six stretch scenarios pass too,** up to `beyond-3m-explore` at
-  3 000 000 deliveries/s (service p99 4.2 ms).
-- **`cliff-300` holds** 3 587 927 deliveries/s at 99.998% with 7 warnings.
-
-This sweep did not find the gateway's ceiling on this machine.
+  warnings, and a service p99 of 5.1–6.0 ms.
+- **Five of the six stretch scenarios pass,** up to `beyond-2m-fanout` and
+  `beyond-2m-mesh` at 2 000 000 deliveries/s (service p99 10.9 ms and 4.2 ms).
+- **`beyond-3m-explore` is the first row that does not hold:** 2 994 931
+  deliveries/s at 99.831% delivery with 500 warnings, verdict `cliff`.
+- **`cliff-300` holds** 3 588 000 deliveries/s at 100% with zero warnings, on
+  a lightly loaded machine. It is load-sensitive, see *How to read these*.
 
 The earlier "not yet met" came from two things:
 
 - **Never measured.** The goal scenarios had never been run on a calibrated
   harness.
-- **A harness artifact.** The previous `loadgen` was the bottleneck under heavy
-  load (see *Superseded: measured with the previous harness*).
+- **A harness artifact.** The previous `loadgen` lost about 28% of the frames
+  on `cliff-300` in every run (see *Superseded: measured with the previous
+  harness*).
 
 ### Goal and stretch scenarios
 
@@ -183,24 +185,26 @@ On a same-machine run the load generator can saturate first (see the cliff row
 below). A `harness-bound` verdict means the measurement described the harness,
 not the gateway ceiling — do not quote it as either a hit or a gateway failure.
 
-Results from `scripts/bench.sh --all --protocol legacy` on 2026-10-06, same
+Results from `scripts/bench.sh --all --protocol legacy` at `0bc858b`, same
 machine and conditions as *Measured baselines*. `goal-1m-topics` needs
 `--protocol topics` and was skipped:
 
-| Scenario | Offered | Throughput | service p99 | Delivery | Warnings | Rate held | Verdict |
-|----------|---------|------------|-------------|----------|----------|-----------|---------|
-| goal-1m-fanout | 1 000 000 | 1 000 000 | 8.864 ms | 100.0000% | 0 | yes | pass |
-| goal-1m-ingest | 1 000 000 | 1 000 000 | 6.384 ms | 100.0000% | 0 | yes | pass |
-| goal-1m-mesh | 1 000 000 | 1 000 000 | 7.408 ms | 100.0000% | 0 | yes | pass |
-| beyond-1.5m-fanout | 1 500 000 | 1 500 000 | 5.808 ms | 100.0000% | 0 | yes | pass |
-| beyond-1.5m-ingest | 1 500 000 | 1 500 000 | 4.752 ms | 100.0000% | 0 | yes | pass |
-| beyond-1.5m-mesh | 1 500 000 | 1 500 000 | 8.176 ms | 100.0000% | 0 | yes | pass |
-| beyond-2m-fanout | 2 000 000 | 2 000 000 | 13.984 ms | 100.0000% | 0 | yes | pass |
-| beyond-2m-mesh | 2 000 000 | 2 000 000 | 4.208 ms | 100.0000% | 0 | yes | pass |
-| beyond-3m-explore | 3 000 000 | 3 000 000 | 4.240 ms | 100.0000% | 0 | yes | pass |
+| Scenario | Offered | Throughput | service p99 | Delivery | Warnings | Verdict |
+|----------|---------|------------|-------------|----------|----------|---------|
+| goal-1m-fanout | 1 000 000 | 1 000 000 | 6.000 ms | 100% | 0 | pass |
+| goal-1m-ingest | 1 000 000 | 1 000 000 | 5.072 ms | 100% | 0 | pass |
+| goal-1m-mesh | 1 000 000 | 1 000 000 | 5.744 ms | 100% | 0 | pass |
+| beyond-1.5m-fanout | 1 500 000 | 1 500 000 | 5.872 ms | 100% | 0 | pass |
+| beyond-1.5m-ingest | 1 500 000 | 1 500 000 | 2.728 ms | 100% | 0 | pass |
+| beyond-1.5m-mesh | 1 500 000 | 1 500 000 | 5.200 ms | 100% | 0 | pass |
+| beyond-2m-fanout | 2 000 000 | 2 000 000 | 10.912 ms | 100% | 0 | pass |
+| beyond-2m-mesh | 2 000 000 | 2 000 000 | 4.240 ms | 100% | 0 | pass |
+| beyond-3m-explore | 3 000 000 | 2 994 931 | 5.648 ms | 99.831% | 500 | cliff |
 
-These are one run each. A pass at 3M on this machine says the process held that
-load for 13 measured seconds, not that 3M is a ceiling or a guarantee.
+The 1M goal is hit in 3 of 3 goal scenarios and 5 of 6 stretch scenarios pass.
+These are one run each. A pass at 2M on this machine says the process held that
+load for the measured window, not that 2M is a ceiling or a guarantee, and
+`beyond-3m-explore` shows a run that already drops frames.
 
 ## Measured baselines
 
@@ -213,61 +217,51 @@ numbers come from `scripts/bench.sh --goal`.
 **Conditions:**
 - Apple M4 Pro, 14 cores, `--release`, gateway and load generator on the same
   machine.
-- Gateway code identical to `main` at `dbe04ae`, measured from commit `26404a6`
-  (the rebuilt harness).
-- Driven by `scripts/bench.sh --all --protocol legacy`, after
-  `scripts/calibrate.sh` passed every case.
-- The machine was not idle. macOS's `BTLEServer` held one core at about 100%
-  throughout, and the 1-minute load average was 5.5 at the start.
+- Measured at commit `0bc858b`, driven by
+  `bash scripts/bench.sh --all --protocol legacy`, after `scripts/calibrate.sh`
+  passed all 15 cases.
+- The machine was not idle. The 1-minute load average was between 3.4 and 11
+  during the run, so latencies carry that noise.
 
 This is the global-bus "before" of topic routing.
 
-| Date | Scenario | Invocation | Throughput | service p50 | service p99 | response p99 | Delivery | Warnings | Gateway CPU | Loadgen CPU | Peak RSS | RSS/conn |
-|------|----------|------------|------------|-------------|-------------|--------------|----------|----------|-------------|-------------|----------|----------|
-| 2026-10-06 | fanout-200 | `--connections 200 --senders 5 --rate 50 --seconds 15` | 49 750 | 2.39 ms | 9.06 ms | 11.74 ms | 100.00% | 0 | 18% | 26% | 31.5 MiB | 145.4 KiB |
-| 2026-10-06 | fanout-500 | `--connections 500 --senders 5 --rate 50 --seconds 15` | 124 750 | 4.21 ms | 13.54 ms | 15.78 ms | 100.00% | 0 | 81% | 83% | 73.1 MiB | 143.4 KiB |
-| 2026-10-06 | fanout-1000 | `--connections 1000 --senders 5 --rate 50 --seconds 15` | 249 750 | 4.72 ms | 11.87 ms | 14.30 ms | 100.00% | 0 | 186% | 153% | 141.8 MiB | 142.1 KiB |
-| 2026-10-06 | ingest-50 | `--connections 50 --senders 50 --rate 200 --seconds 15` | 490 000 | 1.68 ms | 6.83 ms | 10.66 ms | 100.00% | 0 | 138% | 120% | 10.9 MiB | 161.8 KiB |
-| 2026-10-06 | payload-4k | `--connections 200 --senders 5 --rate 50 --payload-bytes 4096 --seconds 15` | 49 750 | 4.06 ms | 10.72 ms | 13.28 ms | 100.00% | 0 | 31% | 37% | 38.5 MiB | 181.8 KiB |
-| 2026-10-06 | binary-200 | `--connections 200 --senders 5 --rate 50 --seconds 15 --binary` | 49 750 | 2.52 ms | 10.40 ms | 14.05 ms | 100.00% | 0 | 18% | 29% | 31.7 MiB | 146.9 KiB |
-| 2026-10-06 | cliff-300 | `--connections 300 --senders 30 --rate 400 --seconds 15` | 3 587 927 | 2.23 ms | 5.68 ms | 8.11 ms | 99.998% | 7 | 496% | 557% | 46.6 MiB | 148.8 KiB |
+| Scenario | Invocation | Throughput | service p50 | service p99 | Delivery | Warnings | Verdict |
+|----------|------------|------------|-------------|-------------|----------|----------|---------|
+| fanout-200 | `--connections 200 --senders 5 --rate 50 --seconds 15` | 49 750 | 2.584 ms | 6.384 ms | 100% | 0 | pass |
+| fanout-500 | `--connections 500 --senders 5 --rate 50 --seconds 15` | 124 750 | 3.592 ms | 12.384 ms | 100% | 0 | pass |
+| fanout-1000 | `--connections 1000 --senders 5 --rate 50 --seconds 15` | 249 750 | 4.880 ms | 10.976 ms | 100% | 0 | pass |
+| ingest-50 | `--connections 50 --senders 50 --rate 200 --seconds 15` | 490 000 | 1.796 ms | 5.488 ms | 100% | 0 | pass |
+| payload-4k | `--connections 200 --senders 5 --rate 50 --payload-bytes 4096 --seconds 15` | 49 750 | 3.848 ms | 9.504 ms | 100% | 0 | pass |
+| binary-200 | `--connections 200 --senders 5 --rate 50 --seconds 15 --binary` | 49 750 | 2.520 ms | 11.104 ms | 100% | 0 | pass |
+| cliff-300 | `--connections 300 --senders 30 --rate 400 --seconds 15` | 3 588 000 | 1.948 ms | 3.688 ms | 100% | 0 | pass |
 
-Every row drained in about 0.5 s and reports `unaccounted` 0. `ingest-50` has
-no non-publishing socket, so its `unaccounted` is `null` under `legacy`.
+Every row is one run.
 
 ### How to read these
 
 **The clean rows measure latency and cost, not capacity.** Throughput equals
-`senders x rate x (connections - 1)` to the frame in every row but the cliff,
-because the gateway delivered everything that was offered.
-
-**Per-connection cost is about 145 KiB of RSS**, stable from 200 to 1000
-connections (145.4, 143.4, 142.1 KiB/conn).
+`senders x rate x (connections - 1)` to the frame in every row, because the
+gateway delivered everything that was offered.
 
 **Fanout latency grows slowly with connection count.** Going from 200 to 1000
-connections — five times the deliveries per published frame — moved service p50
-from 2.39 ms to 4.72 ms and p99 from 9.06 ms to 11.87 ms.
+connections, five times the deliveries per published frame, moved service p50
+from 2.584 ms to 4.880 ms and p99 from 6.384 ms to 10.976 ms.
 
-**Padding 4 KiB onto every payload cost about 1.7 ms at p50** and 36 KiB more
-RSS per connection at the same message rate. The payload is cloned per
-subscriber as a refcount, not as bytes.
+**Padding 4 KiB onto every payload cost about 1.3 ms at p50** (2.584 ms to
+3.848 ms). The payload is cloned per subscriber as a refcount, not as bytes.
 
-**`cliff-300` is barely a cliff.** At 3.59 million deliveries/s:
-- 7 warnings reported 962 dropped frames, out of 46.6 million expected in the
-  measured window;
-- `unaccounted` is 0, so every lost frame was reported;
-- the generator used 557% CPU against the gateway's 496%, so this run measured
-  the gateway, not the harness.
+**`cliff-300` is load-sensitive.** With the previous `loadgen` it lost about 28%
+of the frames in every run (70.5–72.8% delivered, 206, 481 and 868 warnings,
+p99 575–686 ms), a harness artifact. With the current one it was clean in the
+bench run (3 588 000 deliveries/s, 100%, zero warnings, p99 3.688 ms). Three
+repeat runs at a load average of 11–20 gave 0, 80 and 5081 warnings, delivery
+99.51–100% and p99 3.85–21.2 ms. Quote it only with the machine load next to
+it.
 
 **Single runs, and the machine was not idle.** Treat differences of a few
-milliseconds between rows as noise until they repeat.
+milliseconds between rows as noise until they repeat. The p99 values here vary
+by 2x between neighbouring rows of the same shape.
 
-**Clean-row latencies are about 1 ms higher than the superseded rows**
-(fanout-200 service p50 2.39 ms against 1.55 ms). The instrument does not
-explain it: on the same day, at `goal-1m-mesh`, the rebuilt `loadgen` measured a
-*lower* service p99 than the old one (4.3–4.4 ms against 5.4–5.5 ms). Read it as
-the machine's state, a core held by `BTLEServer`, until a run on an idle machine
-says otherwise.
 
 ### Superseded: measured with the previous harness
 
@@ -278,22 +272,26 @@ and must not be quoted as the gateway's numbers.
 
 **Why they are wrong under load.** The old `loadgen` created a new timer
 (`sleep_until(read_end)`) inside its read loop's `select!` for every frame it
-received. Measured on 2026-10-06 against the same gateway, at
-`--connections 201 --senders 50 --rate 100` (15 million frames received):
+received. Measured against the same gateway binary, old (`2612f71`) against new
+(`0bc858b`), three runs each, at `--connections 201 --senders 50 --rate 100`
+(`goal-1m-mesh`), with CPU per frame as loadgen user plus sys time over frames
+received:
 
-- **CPU per frame:** the old `loadgen` spent 62 s of CPU, 51 s of it in the
-  kernel, about 4.1 µs per frame. The rebuilt one spent 17 s, about 1.1 µs per
-  frame.
-- **Cause isolated:** changing only that loop in the old `loadgen` to create the
-  timer once brought it down to 13–15 s.
-- **The cliff disappears:** with that one change, the old `loadgen` measured
-  `cliff-300` at 100% delivery, zero warnings and a 3.5 ms service p99. Unchanged
-  it measured 76.5% delivery, 750 warnings and a 5.2 s response p99, matching the
-  row below.
+- **CPU per frame:** the old `loadgen` spent 68.8–69.8 s of CPU, mostly in the
+  kernel, 5.30–5.37 µs per frame. The current one spent 22.0–22.5 s,
+  1.69–1.73 µs per frame, about 3.1x less.
+- **Latency did not change:** service p99 was 6.26–6.67 ms with the old
+  `loadgen` and 6.16–7.02 ms with the new one.
+- **The cliff was a harness artifact:** on `cliff-300` (300 connections, 30
+  senders, 400 msg/s) the old `loadgen` delivered 70.5–72.8% in every run, with
+  206, 481 and 868 warnings and a p99 of 575–686 ms. The current one delivered
+  99.51–100%, but still showed 0, 80 and 5081 warnings when the machine was at a
+  load average of 11–20 (see *How to read these*).
 
 The cliff and the "harness-bound" reading below were the generator falling
 behind on its own reads, which made the gateway drop frames for it. Clean rows
 were mostly unaffected.
+
 
 All runs below (superseded): Apple M4 Pro, 14 cores, `--release`, gateway and load generator
 on the same machine, commit `334cf1d` plus the harness rewrite.
