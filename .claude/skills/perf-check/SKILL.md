@@ -132,9 +132,9 @@ cargo run --release --example loadgen -- \
 change to either invalidates every baseline taken with the old one. Re-run
 `scripts/calibrate.sh`, and if a case fails, fix the harness rather than widen
 the tolerance — the predicted values are arithmetic, not preferences. It runs
-cases 1–13 under both protocols where they apply, including one known-answer
+cases 1–15 under both protocols where they apply, including one known-answer
 case per correctness meter (misrouting, silent and reported loss, drain, churn,
-extra topic). Histogram, schedule, expected-delivery and drain arithmetic are
+extra topic, withheld subscribe and unsubscribe acknowledgements). Histogram, schedule, expected-delivery and drain arithmetic are
 unit tested: `cargo test --examples`.
 
 ## Reporting

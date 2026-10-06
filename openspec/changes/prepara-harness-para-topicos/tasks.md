@@ -82,3 +82,15 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
   - that `legacy` reproduces the cases 1–4 answers;
   - that no file in `src/` or `tests/gateway.rs` changed;
   - a grep of the diff for code comments
+
+## 8. Fixes from the independent verification
+
+- [x] 8.1 `refserver`: add `--drop-subscribe-acks K` and `--drop-unsubscribe-acks K`, and add calibration cases 14 (`subscribe_failed` 20) and 15 (`churn_failed` 50), so both meters have a positive known answer
+- [x] 8.2 `refserver`: under `topics`, exit with a message when a connection lags the internal bus instead of reporting an over-counted `warning`
+- [x] 8.3 `bench.sh`: `unaccounted ≠ 0` on a drained run is `incorrect`, negative included; `churn_rate` defaults to 1, as in `loadgen`; remove the header comment added in this change
+- [x] 8.4 `calibrate.sh`: check `churn_failed is null` in case 11 only under `topics`, where it is not trivially true
+- [x] 8.5 `design.md`: align the `misrouted` window, the protocols of cases 11–15 and the refserver faults with the code
+- [x] 8.6 `loadgen`: create the read loop's stop future once instead of on every frame, the same defect class as the old per-frame timer; measure the CPU per frame before and after
+- [ ] 8.7 On an idle machine, re-run `scripts/calibrate.sh` and `scripts/bench.sh --all --protocol legacy`, and repeat the old/new `loadgen` comparison (CPU per frame, `goal-1m-mesh` p99, `cliff-300` warnings over several runs)
+- [ ] 8.8 `docs/architecture.md`: replace the re-baseline with the 8.7 rows, and keep only the claims about the old and new `loadgen` that 8.7 reproduces
+- [ ] 8.9 A new independent session re-verifies and updates `verificacao.md`
