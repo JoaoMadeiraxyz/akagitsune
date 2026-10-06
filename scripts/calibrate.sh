@@ -124,6 +124,9 @@ TOPIC_MISROUTED_EXP=$((TOPIC_SENT_EXP * (TOPIC_CONNS - 1 - (TOPIC_CONNS / TOPIC_
 EXTRA_RATE=10
 EXTRA_SENT_EXP=$((EXTRA_RATE * MEASURED))
 EXTRA_EXPECTED_EXP=$((EXTRA_SENT_EXP * TOPIC_CONNS))
+CHURNERS=20 CHURN_RATE=5
+CHURN_UNSUBSCRIBES=$((CHURNERS * CHURN_RATE * MEASURED / 2))
+CHURN_FAILED_EXP=$((CHURN_UNSUBSCRIBES / 10))
 TOPIC_ARGS=(--connections "$TOPIC_CONNS" --topics "$TOPIC_COUNT" --senders "$TOPIC_SENDERS"
     --rate "$RATE" --seconds "$SECS" --warmup "$WARMUP")
 
@@ -232,7 +235,9 @@ for PROTO in legacy topics; do
 
     assert "case11 drained (0 = false)" 0 "$(json_field "$CASE11" drained | sed 's/false/0/;s/true/1/')" 0 abs
     assert "case11 unaccounted is null" null "$(json_field "$CASE11" unaccounted)" 0 null
-    assert "case11 churn_failed is null" null "$(json_field "$CASE11" churn_failed)" 0 null
+    if [ "$PROTO" = topics ]; then
+        assert "case11 churn_failed is null" null "$(json_field "$CASE11" churn_failed)" 0 null
+    fi
 
     start_case "case 12: the same delay with the default drain limit drains fully"
     PORT=3112
@@ -276,7 +281,7 @@ for PROTO in legacy topics; do
     start_case "case 10: case 5 with twenty churning sockets"
     PORT=3110
     start_ref "$PORT"
-    CASE10=$(loadgen "$PORT" "${TOPIC_ARGS[@]}" --churn 20 --churn-rate 5)
+    CASE10=$(loadgen "$PORT" "${TOPIC_ARGS[@]}" --churn "$CHURNERS" --churn-rate "$CHURN_RATE")
     stop_ref
 
     assert "case10 delivery %" 100 "$(json_field "$CASE10" delivery_pct)" 0.01 abs
@@ -296,6 +301,24 @@ for PROTO in legacy topics; do
     assert "case13 extra expected" "$EXTRA_EXPECTED_EXP" "$(json_field "$CASE13" extra_expected)" 0 abs
     assert "case13 extra delivery %" 100 "$(json_field "$CASE13" extra_delivery_pct)" 0.01 abs
     assert "case13 unaccounted" 0 "$(json_field "$CASE13" unaccounted)" 0 abs
+
+    start_case "case 14: case 5 with every 10th subscribe acknowledgement withheld"
+    PORT=3114
+    start_ref "$PORT" --drop-subscribe-acks 10
+    CASE14=$(loadgen "$PORT" "${TOPIC_ARGS[@]}")
+    stop_ref
+
+    assert "case14 subscribe_failed" $((TOPIC_CONNS / 10)) "$(json_field "$CASE14" subscribe_failed)" 0 abs
+    assert "case14 misrouted > 0 (server subscribed them)" 1 "$(json_field "$CASE14" misrouted)" 0 min
+
+    start_case "case 15: case 10 with every 10th unsubscribe acknowledgement withheld"
+    PORT=3115
+    start_ref "$PORT" --drop-unsubscribe-acks 10
+    CASE15=$(loadgen "$PORT" "${TOPIC_ARGS[@]}" --churn "$CHURNERS" --churn-rate "$CHURN_RATE")
+    stop_ref
+
+    assert "case15 churn_failed" "$CHURN_FAILED_EXP" "$(json_field "$CASE15" churn_failed)" 0 abs
+    assert "case15 delivery %" 100 "$(json_field "$CASE15" delivery_pct)" 0.01 abs
 done
 
 echo
