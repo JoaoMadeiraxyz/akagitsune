@@ -145,14 +145,14 @@ baselines*):
 - **`beyond-3m-explore` is the first row that does not hold:** 2 994 931
   deliveries/s at 99.831% delivery with 500 warnings, verdict `cliff`.
 - **`cliff-300` holds** 3 588 000 deliveries/s at 100% with zero warnings, on
-  a lightly loaded machine. It is load-sensitive, see *How to read these*.
+  a machine at load average 3.4-11. It is load-sensitive, see *How to read these*.
 
 The earlier "not yet met" came from two things:
 
 - **Never measured.** The goal scenarios had never been run on a calibrated
   harness.
-- **A harness artifact.** The previous `loadgen` lost about 28% of the frames
-  on `cliff-300` in every run (see *Superseded: measured with the previous
+- **A different `loadgen`.** The previous build lost about 28% of the frames
+  on `cliff-300` in every run, and the rebuilt one does not (see *Superseded: measured with the previous
   harness*).
 
 ### Goal and stretch scenarios
