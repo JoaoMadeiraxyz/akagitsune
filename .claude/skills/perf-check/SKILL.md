@@ -107,8 +107,11 @@ cargo run --release --example loadgen -- \
   500 ms, up to `--drain-max-ms`. An undrained run is marked `(undrained)` and
   its `unaccounted` is not judged.
 - **Compare the CPU columns.** If `loadgen_cpu_pct` dwarfs `gateway_cpu_pct`,
-  the harness saturated first and you measured the harness. This is what
-  happens in the `cliff-300` scenario on a 14-core machine.
+  the harness saturated first and you measured the harness. The previous
+  `loadgen` did exactly that on `cliff-300`: it created a timer per received
+  frame, burned 1068% CPU, and manufactured a cliff the gateway does not have
+  (see *Superseded* in `docs/architecture.md`). Calibration runs at low load
+  and cannot catch that kind of cost, so the CPU columns are the check.
 
 ## Methodology
 
