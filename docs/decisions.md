@@ -207,3 +207,43 @@ rather than quietly presented as the gateway's ceiling.
 **Decision.** `loadgen` computes expected deliveries per topic from acknowledged members. It reports `misrouted`, `dropped`, `unaccounted` and subscribe-acknowledgement latency, and it can publish binary frames and churn memberships. It drains until delivery settles instead of for a fixed second, and it reports `unaccounted` as `null` when the drain did not complete, so an overloaded but correct run is never called `incorrect`. `refserver` gains `--warn-drops`, `--ignore-topics`, `--drop-subscribe-acks` and `--drop-unsubscribe-acks`, so each new meter has a calibration case with a known answer. `bench.sh` gains an `incorrect` verdict that overrides any other. Both the old and the topic protocol are supported until topic routing lands, so `main` stays measurable and the current gateway gets a same-instrument baseline.
 
 **Consequence.** The 2026-08-03 baselines are superseded by a re-measurement with the new harness. A fast run that routes wrongly can no longer pass. The `legacy` protocol is temporary and is removed by the topic-routing change.
+
+## 12. Delivery is routed by topic; the global bus is gone
+
+**Context.** One global bus made fanout O(N²) and made targeted delivery impossible (entry 8). Topics need the client to say what it wants, which entry 4 had ruled out by having no client-to-server protocol.
+
+**Decision.** Clients send `subscribe`, `unsubscribe` and `publish` control frames. A publish reaches only the other subscribers of its topic, as `{"type":"message","topic":…,"from":…,"data":…}`. The gateway parses its own control frame and still never deserializes `data`. A topic is an opaque key of 1–255 bytes of UTF-8, compared byte for byte. Every `error` frame carries a `topic` field naming the topic of the frame that failed, or `null` when none could be read. A topic exists only while it has subscribers: the first `subscribe` creates it, removing the last subscriber deletes it, a `publish` never creates it, and nothing is retained across an empty period. Topics have no owner, no namespace and no access control. The global bus is removed: "everyone" is a topic everyone subscribes to. Supersedes entries 4 and 8.
+
+**Consequence.** Breaking change for every client. Fanout is bounded by topic size. The gateway now has a client protocol to version and test. Anything a client wants beyond routing still goes inside `data`. Applications sharing a gateway must avoid key collisions themselves, and any connection can read any topic until subscription authorization is added, which is the expected next step.
+
+## 13. The registry holds subscriber inboxes, read without locks
+
+**Context.** Routing needs topic → subscribers, which is the first shared state beyond the connection counter (entry 6 anticipated a registry). A lock on the publish path would serialize every publisher.
+
+**Decision.** A lock-free concurrent map (`papaya`) from topic to an immutable `Arc<[Subscriber]>`, where a subscriber is the connection's id and its inbox. Membership changes are copy-on-write and remove the entry when it empties. The publisher fans out by sending into each inbox, and the bridge task is removed. Rejected alternatives: a broadcast channel per topic, `RwLock`/`DashMap`, and subscriptions held in Redis (see the change's design).
+
+**Consequence.** Publish takes no lock in gateway code and cannot grow memory. Membership changes cost O(topic size). Fanout work moves into the publisher's task. The same handle serves later presence, direct delivery and backplane work.
+
+## 14. Backpressure is a per-connection inbox that drops the oldest
+
+**Context.** Without the global bus there is no shared ring to lag behind. A first draft used an `mpsc` per connection, but an `mpsc` can only refuse new frames. That drops the newest, and a warning has nothing to ride on once the stream stops, so a receiver that stopped reading never learned what it lost.
+
+**Decision.** Each connection's inbox is a 256-slot `tokio::sync::broadcast` channel with a single receiver, its writer. Publishers never wait, a full inbox overwrites its oldest frame, and the writer turns `Lagged(n)` into `{"type":"warning","dropped":n}` before continuing with the oldest frame still held. Control replies (`subscribed`, `unsubscribed`, `error`) use a separate channel and are never dropped. This amends the mechanism of entry 7, and the policy and the wire frame are unchanged.
+
+**Consequence.** A slow receiver loses its oldest frames, is told exactly how many, and still gets the newest, as today. The count no longer includes a connection's own frames. `broadcast::send` takes tokio's internal locks, now contended per receiver instead of globally. A lock-free ring is a later option if a measurement shows that contention.
+
+## 15. Binary frames carry a topic header
+
+**Context.** Binary frames had no envelope (entry 3), so they could neither name a topic nor tell a receiver who sent them.
+
+**Decision.** Inbound binary is `[len: u8][topic][payload]`. Delivered binary is `[len: u8][topic][sender uuid: 16 bytes][payload]`, built once per publish. The payload stays opaque. Supersedes entry 3.
+
+**Consequence.** Binary clients must frame the header. In exchange they route like text clients and learn the sender. A topic is limited to 255 bytes for both frame types.
+
+## 16. The no-locks rule covers gateway code, not tokio channel internals
+
+**Context.** `CLAUDE.md` said "No locks on the hot path", and `docs/architecture.md` said the only shared mutable state was one `AtomicUsize`. Neither was literally true: today's global bus is a `tokio::sync::broadcast`, whose `send` locks the channel tail and a slot (tokio 1.53.1, `sync/broadcast.rs:662` and `:677`), with every publisher contending on that one tail. Topic routing keeps `broadcast`, now as one inbox per connection, so the question had to be decided explicitly.
+
+**Decision.** The rule is reworded: "Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`." Gateway code takes no lock and holds nothing across `.await`. Channel-internal locks are accepted because they are held for a few instructions, are released inside the call, and in this design are contended only by publishers writing to the same receiver at the same instant, instead of by every publisher as today. Replacing the inbox with a lock-free ring is not done preemptively. It is reopened only if a benchmark shows inbox contention, which the `ingest-50`, `goal-1m-ingest` and `goal-1m-mesh` rows measure.
+
+**Consequence.** The rule now describes what the code does. Reviews check gateway code for locks and for `.await` while holding one, not tokio's internals. A future dependency that takes locks inside its own calls falls under the same allowance only if those locks are short and never held across `.await`; anything else needs a new entry.

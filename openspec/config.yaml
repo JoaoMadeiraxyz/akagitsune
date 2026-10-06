@@ -2,9 +2,10 @@ schema: spec-driven
 
 context: |
   Service: realtime-gateway (crate `realtime_gateway`, repository branded Akagitsune).
-  A generic WebSocket relay. It accepts connections on `GET /ws`, assigns each
-  one a UUID, and relays every frame to every other connection on a single
-  global `tokio::sync::broadcast` bus. It never interprets the payload.
+  A generic WebSocket relay with topic routing. It accepts connections on
+  `GET /ws`, assigns each one a UUID, and relays a publish to the other
+  connections subscribed to its topic through a lock-free topic registry, one
+  `tokio::sync::broadcast` inbox per connection. It never interprets the payload.
 
   Boundaries: no upstream or downstream service. Clients are arbitrary
   WebSocket peers; there is no auth, no storage, no backplane. Config is only
@@ -15,9 +16,10 @@ context: |
   serde/serde_json with `raw_value`, uuid, tracing. Dev: tokio-tungstenite.
 
   Code map:
-    src/protocol.rs  ServerMessage: welcome, message, warning, error frames
-    src/state.rs     AppState, BroadcastMessage, BROADCAST_CAPACITY
-    src/ws.rs        handle_socket: reader, bridge and writer tasks
+    src/protocol.rs  ServerMessage, ClientFrame, binary topic header
+    src/registry.rs  TopicRegistry, Subscriber, Subscriptions, fanout
+    src/state.rs     AppState: the registry and the connection counter
+    src/ws.rs        handle_socket: reader and writer tasks, INBOX_CAPACITY
     src/lib.rs       app() router and run()
     src/main.rs      config, logging, ctrl-c shutdown
     tests/gateway.rs end-to-end tests against a real listener
@@ -26,7 +28,7 @@ context: |
   Authoritative docs, read before proposing:
     CLAUDE.md             hard rules (no payload deserialization, no domain
                           vocabulary, no code comments, serialize once,
-                          no locks on the hot path)
+                          no locks in gateway code)
     docs/scope.md         the scope test and the borderline cases
     docs/architecture.md  lifecycle and hot-path invariants
     docs/decisions.md     numbered design decisions
@@ -80,8 +82,8 @@ rules:
       --all-targets -D warnings and cargo test on the PR, but nothing blocks
       a merge on red, so the reviewer confirms the run is green.
     - >-
-      Changes to src/ws.rs reader/bridge/writer, src/state.rs or bus
-      capacities include a manual `scripts/bench.sh --goal` run with the
+      Changes to src/ws.rs reader/writer, src/registry.rs, src/state.rs or
+      inbox capacities include a manual `scripts/bench.sh --goal` run with the
       numbers in the PR. CI does not measure performance.
 
 operations:
