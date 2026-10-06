@@ -36,7 +36,7 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 
 - [x] 3.1 Run cases 1–4 under both protocols with their current predicted answers
 - [x] 3.2 Add cases 5–13 from `design.md` decision 1. Cases 7–9, 11 and 12 run under both protocols, and cases 5, 6, 10 and 13 run under `topics` only. Case 7 under `legacy` uses the expected deliveries of the non-publishing connections only. Every predicted value comes from arithmetic
-- [ ] 3.3 Get every case green. If one fails, fix the harness rather than widen a tolerance
+- [x] 3.3 Get every case green. If one fails, fix the harness rather than widen a tolerance
 
 ## 4. bench.sh
 
@@ -54,11 +54,11 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 
 ## 5. Re-baseline
 
-- [ ] 5.1 On a quiet machine, run `scripts/calibrate.sh`, then `scripts/bench.sh --all --protocol legacy` against the current gateway on `main`
+- [x] 5.1 On a quiet machine, run `scripts/calibrate.sh`, then `scripts/bench.sh --all --protocol legacy` against the current gateway on `main`
 
 ## 6. Documentation
 
-- [ ] 6.1 `docs/architecture.md`:
+- [x] 6.1 `docs/architecture.md`:
   - replace the *Measured baselines* rows with the task 5.1 rows, moving the 2026-08-03 rows to a subsection titled as measured with the previous harness;
   - rewrite *Status* from the new rows, re-deriving the per-connection RSS and the cliff reading;
   - add calibration cases 5–13, with predicted and measured values, to *Harness calibration*, and describe drain-until-quiet;
@@ -75,7 +75,7 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 ## 7. Verify
 
 - [x] 7.1 Author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (examples included) and `openspec validate --all --strict` locally before opening the PR
-- [ ] 7.2 Author puts the calibration report and the re-baseline table in the PR. CI does not measure performance
+- [x] 7.2 Author puts the calibration report and the re-baseline table in the PR. CI does not measure performance
 - [ ] 7.3 CI runs fmt, clippy and `cargo test` on the PR. `main` has no branch protection, so the reviewer confirms the run is green before merging
 - [ ] 7.4 An independent session fills `verificacao.md`:
   - each meter against its calibration case;
