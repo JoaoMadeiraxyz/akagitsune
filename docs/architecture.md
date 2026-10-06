@@ -189,17 +189,17 @@ Results from `scripts/bench.sh --all --protocol legacy` at `0bc858b`, same
 machine and conditions as *Measured baselines*. `goal-1m-topics` needs
 `--protocol topics` and was skipped:
 
-| Scenario | Offered | Throughput | service p99 | Delivery | Warnings | Verdict |
-|----------|---------|------------|-------------|----------|----------|---------|
-| goal-1m-fanout | 1 000 000 | 1 000 000 | 6.000 ms | 100% | 0 | pass |
-| goal-1m-ingest | 1 000 000 | 1 000 000 | 5.072 ms | 100% | 0 | pass |
-| goal-1m-mesh | 1 000 000 | 1 000 000 | 5.744 ms | 100% | 0 | pass |
-| beyond-1.5m-fanout | 1 500 000 | 1 500 000 | 5.872 ms | 100% | 0 | pass |
-| beyond-1.5m-ingest | 1 500 000 | 1 500 000 | 2.728 ms | 100% | 0 | pass |
-| beyond-1.5m-mesh | 1 500 000 | 1 500 000 | 5.200 ms | 100% | 0 | pass |
-| beyond-2m-fanout | 2 000 000 | 2 000 000 | 10.912 ms | 100% | 0 | pass |
-| beyond-2m-mesh | 2 000 000 | 2 000 000 | 4.240 ms | 100% | 0 | pass |
-| beyond-3m-explore | 3 000 000 | 2 994 931 | 5.648 ms | 99.831% | 500 | cliff |
+| Scenario | Offered | Throughput | service p99 | Delivery | Warnings | Verdict | Gateway CPU | Loadgen CPU | Peak RSS | RSS per connection |
+|----------|---------|------------|-------------|----------|----------|---------|-------------|-------------|----------|--------------------|
+| goal-1m-fanout | 1 000 000 | 1 000 000 | 6.000 ms | 100% | 0 | pass | 315% | 219% | 75.1 MiB | 147.2 KiB |
+| goal-1m-ingest | 1 000 000 | 1 000 000 | 5.072 ms | 100% | 0 | pass | 219% | 173% | 18.6 MiB | 158.2 KiB |
+| goal-1m-mesh | 1 000 000 | 1 000 000 | 5.744 ms | 100% | 0 | pass | 202% | 160% | 32.5 MiB | 150.3 KiB |
+| beyond-1.5m-fanout | 1 500 000 | 1 500 000 | 5.872 ms | 100% | 0 | pass | 352% | 242% | 75.4 MiB | 148.0 KiB |
+| beyond-1.5m-ingest | 1 500 000 | 1 500 000 | 2.728 ms | 100% | 0 | pass | 278% | 182% | 18.4 MiB | 156.1 KiB |
+| beyond-1.5m-mesh | 1 500 000 | 1 500 000 | 5.200 ms | 100% | 0 | pass | 210% | 131% | 39.6 MiB | 148.9 KiB |
+| beyond-2m-fanout | 2 000 000 | 2 000 000 | 10.912 ms | 100% | 0 | pass | 598% | 350% | 144.0 MiB | 144.1 KiB |
+| beyond-2m-mesh | 2 000 000 | 2 000 000 | 4.240 ms | 100% | 0 | pass | 284% | 195% | 32.7 MiB | 151.3 KiB |
+| beyond-3m-explore | 3 000 000 | 2 994 931 | 5.648 ms | 99.831% | 500 | cliff | 373% | 281% | 47.0 MiB | 149.7 KiB |
 
 The 1M goal is hit in 3 of 3 goal scenarios and 5 of 6 stretch scenarios pass.
 These are one run each. A pass at 2M on this machine says the process held that
@@ -225,15 +225,15 @@ numbers come from `scripts/bench.sh --goal`.
 
 This is the global-bus "before" of topic routing.
 
-| Scenario | Invocation | Throughput | service p50 | service p99 | Delivery | Warnings | Verdict |
-|----------|------------|------------|-------------|-------------|----------|----------|---------|
-| fanout-200 | `--connections 200 --senders 5 --rate 50 --seconds 15` | 49 750 | 2.584 ms | 6.384 ms | 100% | 0 | pass |
-| fanout-500 | `--connections 500 --senders 5 --rate 50 --seconds 15` | 124 750 | 3.592 ms | 12.384 ms | 100% | 0 | pass |
-| fanout-1000 | `--connections 1000 --senders 5 --rate 50 --seconds 15` | 249 750 | 4.880 ms | 10.976 ms | 100% | 0 | pass |
-| ingest-50 | `--connections 50 --senders 50 --rate 200 --seconds 15` | 490 000 | 1.796 ms | 5.488 ms | 100% | 0 | pass |
-| payload-4k | `--connections 200 --senders 5 --rate 50 --payload-bytes 4096 --seconds 15` | 49 750 | 3.848 ms | 9.504 ms | 100% | 0 | pass |
-| binary-200 | `--connections 200 --senders 5 --rate 50 --seconds 15 --binary` | 49 750 | 2.520 ms | 11.104 ms | 100% | 0 | pass |
-| cliff-300 | `--connections 300 --senders 30 --rate 400 --seconds 15` | 3 588 000 | 1.948 ms | 3.688 ms | 100% | 0 | pass |
+| Scenario | Invocation | Throughput | service p50 | service p99 | Delivery | Warnings | Verdict | Gateway CPU | Loadgen CPU | Peak RSS | RSS per connection |
+|----------|------------|------------|-------------|-------------|----------|----------|---------|-------------|-------------|----------|--------------------|
+| fanout-200 | `--connections 200 --senders 5 --rate 50 --seconds 15` | 49 750 | 2.584 ms | 6.384 ms | 100% | 0 | pass | 25% | 40% | 31.7 MiB | 146.9 KiB |
+| fanout-500 | `--connections 500 --senders 5 --rate 50 --seconds 15` | 124 750 | 3.592 ms | 12.384 ms | 100% | 0 | pass | 76% | 69% | 73.2 MiB | 143.6 KiB |
+| fanout-1000 | `--connections 1000 --senders 5 --rate 50 --seconds 15` | 249 750 | 4.880 ms | 10.976 ms | 100% | 0 | pass | 192% | 146% | 141.7 MiB | 142.0 KiB |
+| ingest-50 | `--connections 50 --senders 50 --rate 200 --seconds 15` | 490 000 | 1.796 ms | 5.488 ms | 100% | 0 | pass | 98% | 112% | 11.2 MiB | 167.9 KiB |
+| payload-4k | `--connections 200 --senders 5 --rate 50 --payload-bytes 4096 --seconds 15` | 49 750 | 3.848 ms | 9.504 ms | 100% | 0 | pass | 36% | 52% | 37.8 MiB | 177.7 KiB |
+| binary-200 | `--connections 200 --senders 5 --rate 50 --seconds 15 --binary` | 49 750 | 2.520 ms | 11.104 ms | 100% | 0 | pass | 24% | 34% | 31.2 MiB | 143.9 KiB |
+| cliff-300 | `--connections 300 --senders 30 --rate 400 --seconds 15` | 3 588 000 | 1.948 ms | 3.688 ms | 100% | 0 | pass | 547% | 386% | 46.8 MiB | 149.2 KiB |
 
 Every row is one run.
 
@@ -250,15 +250,31 @@ from 2.584 ms to 4.880 ms and p99 from 6.384 ms to 10.976 ms.
 **Padding 4 KiB onto every payload cost about 1.3 ms at p50** (2.584 ms to
 3.848 ms). The payload is cloned per subscriber as a refcount, not as bytes.
 
+**Per-connection cost is roughly 145 KiB of RSS.** Across the unpadded rows
+with at least 200 connections in `bench-results/20261006-142007-all.csv`,
+`rss_per_conn_kib` is 142.0-151.3 KiB, and 142.0-149.7 KiB for the baseline
+rows (`beyond-3m-explore` at 149.7 is the top of that range). It does not trend
+with connection count from 200 to 1000 (146.9, 143.6, 142.0 KiB). Rows with
+fewer connections cost more per connection (167.9 KiB at 50, 156-158 KiB at
+101) because the fixed process cost is spread over fewer sockets, and
+`payload-4k` costs 177.7 KiB.
+
+**`cliff-300` was gateway-bound in the bench run, not harness-bound.** The
+gateway used 547% CPU against 386% for `loadgen`. A harness-bound row shows the
+opposite. The row was clean, so it says the gateway held that load on this
+machine at that moment, and the CPU columns show how much of the machine it took.
+
 **`cliff-300` is load-sensitive.** With the previous `loadgen` it lost about 28%
 of the frames in every run (70.5–72.8% delivered, 206, 481 and 868 warnings,
-p99 575–686 ms), a harness artifact. With the current one it was clean in the
+p99 575–686 ms). With the current one it was clean in the
 bench run (3 588 000 deliveries/s, 100%, zero warnings, p99 3.688 ms). Three
 repeat runs at a load average of 11–20 gave 0, 80 and 5081 warnings, delivery
-99.51–100% and p99 3.85–21.2 ms. Quote it only with the machine load next to
-it.
+99.51–100% and p99 3.85–21.2 ms. The raw runs are in
+[the loadgen comparison](measurements/2026-10-06-loadgen-comparison.md). Quote
+it only with the machine load next to it.
 
-**Single runs, and the machine was not idle.** Treat differences of a few
+**Single runs, and the machine was not idle.** The load average is recorded
+next to each run instead of requiring an idle machine. Treat differences of a few
 milliseconds between rows as noise until they repeat. The p99 values here vary
 by 2x between neighbouring rows of the same shape.
 
@@ -270,27 +286,31 @@ with the `loadgen` that predates `prepara-harness-para-topicos`, on gateway
 commit `334cf1d`. No gateway code has changed since. They are kept as a record
 and must not be quoted as the gateway's numbers.
 
-**Why they are wrong under load.** The old `loadgen` created a new timer
+**Why they are unreliable under load.** The old `loadgen` created a new timer
 (`sleep_until(read_end)`) inside its read loop's `select!` for every frame it
-received. Measured against the same gateway binary, old (`2612f71`) against new
-(`0bc858b`), three runs each, at `--connections 201 --senders 50 --rate 100`
-(`goal-1m-mesh`), with CPU per frame as loadgen user plus sys time over frames
-received:
+received, and the rebuilt one creates it once. Only the difference between the
+two `loadgen` builds was measured. Pinning that one timer alone was not run, so
+it is not established that the timer is what caused the old results. Measured
+against the same gateway binary, old (`2612f71`) against new (`0bc858b`), three
+runs each, at `--connections 201 --senders 50 --rate 100` (`goal-1m-mesh`), with
+CPU per frame as loadgen user plus sys time over frames received. The raw
+output and exact commands are in
+[the loadgen comparison](measurements/2026-10-06-loadgen-comparison.md):
 
 - **CPU per frame:** the old `loadgen` spent 68.8–69.8 s of CPU, mostly in the
   kernel, 5.30–5.37 µs per frame. The current one spent 22.0–22.5 s,
   1.69–1.73 µs per frame, about 3.1x less.
 - **Latency did not change:** service p99 was 6.26–6.67 ms with the old
   `loadgen` and 6.16–7.02 ms with the new one.
-- **The cliff was a harness artifact:** on `cliff-300` (300 connections, 30
+- **The cliff differs between the two builds:** on `cliff-300` (300 connections, 30
   senders, 400 msg/s) the old `loadgen` delivered 70.5–72.8% in every run, with
   206, 481 and 868 warnings and a p99 of 575–686 ms. The current one delivered
   99.51–100%, but still showed 0, 80 and 5081 warnings when the machine was at a
   load average of 11–20 (see *How to read these*).
 
-The cliff and the "harness-bound" reading below were the generator falling
-behind on its own reads, which made the gateway drop frames for it. Clean rows
-were mostly unaffected.
+The old `cliff-300` rows are consistent with the generator falling behind on
+its own reads, but the cause was never isolated: only the old-versus-new
+difference is measured. Clean rows were mostly unaffected.
 
 
 All runs below (superseded): Apple M4 Pro, 14 cores, `--release`, gateway and load generator
@@ -374,7 +394,7 @@ Measured on 2026-10-06, same machine and conditions as *Measured baselines*
 | 1 | 2,500 frames published (5 x 50 x 10 s) | 2,500 / 2,500 |
 | 1 | 497,500 deliveries (2,500 x 199), 100% | 497,500 / 497,500, 100% |
 | 1 | Server's own delivery counter | 597,000 / 597,000 (topics: plus 200 acknowledgements) |
-| 2 | 50 ms injected delay → service p50 50 ms (±2), p99 ±5 | 51.58 / 51.58 ms, p99 53.38 / 54.14 ms |
+| 2 | 50 ms injected delay → service p50 minus (floor + held delay) is 0 ± 1 ms, p99 within ± 5 ms, using the `hold_p50_ms` and `hold_p99_ms` the `refserver` reports | service p50 51.58 / 51.58 ms, p99 53.38 / 54.14 ms, floor 0.49-0.50 ms, server held 51.2 ms, difference -0.13 ms |
 | 3 | 1-in-10 injected loss → delivery 90% | 90.0000% / 90.0000% |
 | 4 | 500 ms freeze → response max ≥ 497 ms | 518.97 / 507.39 ms |
 | 5 | 10 topics of 20: 5,000 published, 95,000 delivered | topics: 5,000, 95,000, misrouted 0 |
@@ -386,11 +406,16 @@ Measured on 2026-10-06, same machine and conditions as *Measured baselines*
 | 11 | 2 s delay, 500 ms drain limit → not drained, unaccounted null | null / null |
 | 12 | 2 s delay, default limit → drained, ≥ 2 s, unaccounted 0 | 2.50 / 2.49 s, 0 / 0 |
 | 13 | extra topic at 10/s → extra_expected 20,000 at 100% | topics: 20,000, 100% |
+| 14 | case 5 against `--drop-subscribe-acks 10` → subscribe_failed 20 (every 10th of 200 setup acknowledgements), misrouted > 0 | topics: 20, misrouted > 0 |
+| 15 | case 10 against `--drop-unsubscribe-acks 10` → churn_failed 50 (500 churn operations, half of them unsubscribes, every 10th withheld) | topics: 50 |
 
 Case 8 is the run that set the `legacy` prediction to exactly 10 x 99/95: the
 `dropped` total counts every receiver while the scope excludes the 5
 publishers. The assertion was tightened to that value after this run.
 
-The 1.58 ms above the injected 50 ms is the measurement floor of this setup:
-one loopback hop plus the millisecond granularity of the timer on each side.
-Treat any service-latency figure below about 1.5 ms as at the noise floor.
+The 1.58 ms above the injected 50 ms is mostly the server's own timer overshoot:
+the `refserver` held each frame 51.2 ms against the 50 ms requested, about 1.2
+ms. The measurement floor of the setup, one loopback hop without delay, is
+0.49-0.50 ms. Case 2 therefore checks `loadgen` against the delay the server
+actually held, not against 50 ms. Treat any service-latency figure below about
+0.5 ms as at the noise floor.

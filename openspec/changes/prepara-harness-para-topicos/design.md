@@ -197,4 +197,4 @@ Today `loadgen` stops reading a fixed `DRAIN` of 1 s after the send window (`exa
 - **Protocol drift.** If review changes the `topics` protocol in `roteia-por-topico`, this harness must follow. The proposal states the dependency, and implementation waits for that proposal's approval.
 - **`refserver` grows.** It is still deliberately naive (one bus with per-connection filters), so its correctness stays obvious by reading it. That independence from the gateway's registry is the point of having it.
 - **Temporary `legacy` branch.** This is a small amount of code with a known removal point, tracked as a task in `roteia-por-topico`.
-- **Re-baselining takes a full `--all` run** on a quiet machine. Numbers from a noisy run must not be recorded.
+- **Re-baselining takes a full `--all` run.** An idle machine is not required, but the load average is recorded next to each run, so a noisy run is disclosed rather than hidden.
