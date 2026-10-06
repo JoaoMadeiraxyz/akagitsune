@@ -94,4 +94,4 @@ The `topics` protocol is the one in `roteia-por-topico/specs`. Start implementat
 - [x] 8.6a `calibrate.sh` case 2: compare the client's service latency with the floor plus the delay the `refserver` actually held (reported as `hold_p50_ms`/`hold_p99_ms`), instead of assuming the requested 50 ms
 - [x] 8.7 Record the load average next to each run (an idle machine is not required), re-run `scripts/calibrate.sh` and `scripts/bench.sh --all --protocol legacy`, and repeat the old/new `loadgen` comparison (CPU per frame, `goal-1m-mesh` p99, `cliff-300` warnings over several runs)
 - [x] 8.8 `docs/architecture.md`: replace the re-baseline with the 8.7 rows, and keep only the claims about the old and new `loadgen` that 8.7 reproduces
-- [ ] 8.9 A new independent session re-verifies and updates `verificacao.md`
+- [x] 8.9 A new independent session re-verifies and updates `verificacao.md`
