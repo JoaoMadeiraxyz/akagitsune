@@ -40,6 +40,15 @@ OPTIONS:
     --drop-1-in <K>        discard every Kth delivery per subscriber  [default: 0]
     --warn-drops           report each discarded delivery with a warning frame
     --ignore-topics        topics only: deliver every publish to every connection
+    --drop-subscribe-acks <K>    topics only: withhold every Kth subscribed reply,
+                                 counted across all connections  [default: 0]
+    --drop-unsubscribe-acks <K>  topics only: withhold every Kth unsubscribed reply,
+                                 counted across all connections  [default: 0]
+
+Under topics, a connection that falls behind the internal bus aborts the
+process: the bus carries every topic, so its lag count cannot say how many of
+the skipped frames were meant for that connection, and a reference that
+reported a wrong count would be worse than one that stops.
     --stall-at <S>         seconds after startup at which to freeze  [default: 0]
     --stall-ms <M>         how long the freeze lasts; 0 disables  [default: 0]
     --help                 show this message
@@ -49,7 +58,9 @@ publishers the way a real overloaded server does.
 
 Cumulative deliveries are printed to stderr once a second as
 `deliveries <n>`; the last line is the server's own count, independent of the
-client's.";
+client's. With --delay-ms, the time each delivery was actually held (the OS
+timer can overshoot the requested delay) is printed as `hold_p50_ms` and
+`hold_p99_ms`, so calibration compares the client against what the server did.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Protocol {
@@ -63,6 +74,8 @@ struct Behaviour {
     drop_1_in: u64,
     warn_drops: bool,
     ignore_topics: bool,
+    drop_subscribe_acks: u64,
+    drop_unsubscribe_acks: u64,
     stall_from: Option<Instant>,
     stall_until: Option<Instant>,
 }
@@ -108,6 +121,9 @@ struct ClientFrame<'a> {
 struct RefState {
     tx: broadcast::Sender<Fanout>,
     delivered: Arc<AtomicU64>,
+    holds: std::sync::Mutex<Vec<u32>>,
+    subscribe_acks: AtomicU64,
+    unsubscribe_acks: AtomicU64,
     behaviour: Behaviour,
 }
 
@@ -189,17 +205,25 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
             let fanout = tokio::select! {
                 biased;
                 Some(change) = change_rx.recv() => {
-                    let reply = match change {
+                    let (reply, counter, every) = match change {
                         Change::Subscribe(topic) => {
                             let reply = ack("subscribed", &topic);
                             topics.insert(topic);
-                            reply
+                            (reply, &bridge_state.subscribe_acks, behaviour.drop_subscribe_acks)
                         }
                         Change::Unsubscribe(topic) => {
                             topics.remove(&topic);
-                            ack("unsubscribed", &topic)
+                            (
+                                ack("unsubscribed", &topic),
+                                &bridge_state.unsubscribe_acks,
+                                behaviour.drop_unsubscribe_acks,
+                            )
                         }
                     };
+                    let nth = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if every > 0 && nth.is_multiple_of(every) {
+                        continue;
+                    }
                     if queue_tx.send((Instant::now(), reply)).await.is_err() {
                         return;
                     }
@@ -209,6 +233,13 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                     Ok(fanout) if fanout.source == id => continue,
                     Ok(fanout) => fanout,
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
+                        if behaviour.protocol == Protocol::Topics {
+                            eprintln!(
+                                "refserver: a connection fell {dropped} frames behind the internal bus; \
+                                 the calibration load is too high for this reference"
+                            );
+                            std::process::exit(3);
+                        }
                         if queue_tx.send((Instant::now(), warning(dropped))).await.is_err() {
                             return;
                         }
@@ -252,6 +283,10 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
 
             if !behaviour.delay.is_zero() {
                 sleep_until(TokioInstant::from_std(arrival + behaviour.delay)).await;
+                let held = arrival.elapsed().as_micros() as u32;
+                if let Ok(mut holds) = writer_state.holds.lock() {
+                    holds.push(held);
+                }
             }
 
             if sink.send(frame).await.is_err() {
@@ -364,6 +399,8 @@ async fn main() -> std::io::Result<()> {
     let switch = |name: &str| std::env::args().any(|a| a == name);
     let warn_drops = switch("--warn-drops");
     let ignore_topics = switch("--ignore-topics");
+    let drop_subscribe_acks: u64 = flag("--drop-subscribe-acks", 0);
+    let drop_unsubscribe_acks: u64 = flag("--drop-unsubscribe-acks", 0);
     let delay_ms: u64 = flag("--delay-ms", 0);
     let drop_1_in: u64 = flag("--drop-1-in", 0);
     let stall_at: u64 = flag("--stall-at", 0);
@@ -378,23 +415,40 @@ async fn main() -> std::io::Result<()> {
     let state = Arc::new(RefState {
         tx,
         delivered: Arc::clone(&delivered),
+        holds: std::sync::Mutex::new(Vec::new()),
+        subscribe_acks: AtomicU64::new(0),
+        unsubscribe_acks: AtomicU64::new(0),
         behaviour: Behaviour {
             protocol,
             delay: Duration::from_millis(delay_ms),
             drop_1_in,
             warn_drops,
             ignore_topics,
+            drop_subscribe_acks,
+            drop_unsubscribe_acks,
             stall_from,
             stall_until,
         },
     });
 
     let counter = Arc::clone(&delivered);
+    let stats_state = Arc::clone(&state);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
         loop {
             ticker.tick().await;
             eprintln!("deliveries {}", counter.load(Ordering::Relaxed));
+            let mut holds = match stats_state.holds.lock() {
+                Ok(holds) => holds.clone(),
+                Err(_) => continue,
+            };
+            if holds.is_empty() {
+                continue;
+            }
+            holds.sort_unstable();
+            let at = |p: f64| holds[((holds.len() - 1) as f64 * p) as usize] as f64 / 1000.0;
+            eprintln!("hold_p50_ms {:.3}", at(0.50));
+            eprintln!("hold_p99_ms {:.3}", at(0.99));
         }
     });
 

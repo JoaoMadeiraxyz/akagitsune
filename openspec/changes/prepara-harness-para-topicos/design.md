@@ -56,7 +56,7 @@ With topics, a run can be wrong in ways the old meters cannot see: a frame deliv
   - `read_loop` decodes the envelope's `topic` and `data`, or the binary header, and drops neither path.
   - Text is parsed with the same borrowed decoding as today, so the timing path is unchanged.
 - **New meters, all in `--json`:**
-  - `misrouted`: frames whose `topic` is not the receiver's. It must be 0.
+  - `misrouted`: frames whose `topic` is not one the receiver subscribed to, counted by publish stamp inside the measured window, the same window as `received`, so case 6 can be predicted from the measured publishes. It must be 0.
   - `dropped`: the sum of `dropped` over every `warning`.
   - `unaccounted`: over the whole run (warmup included, since a `warning` carries no timestamp), expected − received − dropped. Because the gateway's `warning` counts are exact (`delivery-backpressure`), a non-zero value means frames vanished without a warning. It must be 0.
     - It is only meaningful once the run has fully drained (decision 4); otherwise it is reported as `null` with `drained: false`.
@@ -83,11 +83,15 @@ With topics, a run can be wrong in ways the old meters cannot see: a frame deliv
 - **New injected faults, each with a known answer:**
   - `--warn-drops`: the existing 1-in-K loss is reported with `warning` frames.
   - `--ignore-topics`: delivers every publish to every connection, as the old bus did.
+  - `--drop-subscribe-acks K` and `--drop-unsubscribe-acks K`: withhold every Kth `subscribed` or `unsubscribed` reply, counted across all connections, so `subscribe_failed` and `churn_failed` have a positive known answer (cases 14 and 15). These were added after the independent verification found that neither meter had a case able to show it detects anything.
+- **Bus lag is fatal under topics.** The internal bus carries every topic, so a `Lagged(n)` count cannot say how many of the skipped frames were meant for that connection. Reporting it as `warning` would over-count drops and make `unaccounted` negative. Under `topics` the reference prints why and exits instead. Under `legacy` every frame is meant for every connection, so the count is exact and is reported as before.
 - **Existing faults.** Delay, silent loss and freeze keep their current behaviour.
 
 **`calibrate.sh`**
 
-The existing cases 1 to 4 run under both protocols at `T = 1` with their current predicted answers (2,500 published, 497,500 delivered, 90% under loss, ≥ 497 ms freeze). Holding them proves the rebuild did not move the instrument. Cases 7–9 also run under both protocols. Cases 5, 6 and 10 are `topics` only. New cases:
+The existing cases 1 to 4 run under both protocols at `T = 1` with their current predicted answers (2,500 published, 497,500 delivered, 90% under loss, ≥ 497 ms freeze). Holding them proves the rebuild did not move the instrument. Case 2 is the exception: it no longer checks `service p50 = 50 ± 2 ms`.
+- **What it checks now:** it runs once without delay to measure the floor, then with `--delay-ms 50`. The `refserver` reports the time it actually held each frame (`hold_p50_ms`, `hold_p99_ms`), and the check is `service p50 − (floor p50 + hold p50) = 0 ± 1 ms`, plus the same for p99 at ± 5 ms.
+- **Why it changed:** on 2026-10-06 a 50 ms `tokio::time::sleep_until` measured 50.5–57.0 ms on the calibration machine (p50 54.7 ms in an isolated test, 51.2 ms inside the `refserver`). The old absolute check therefore failed with both the old and the new harness. It was measuring the operating system's timer overshoot, not whether `loadgen` reports what the server did. Cases 7–9, 11 and 12 also run under both protocols. Cases 5, 6, 10, 13, 14 and 15 are `topics` only. New cases:
 
 | Case | Setup | Predicted |
 |---|---|---|
@@ -100,6 +104,8 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
 | 11 undrained run | 20 connections, 1 sender at 20/s, 10 s measured, against `--delay-ms 2000`, with `--drain-max-ms 500` | `drained` false, `unaccounted` and `churn_failed` `null`, never a positive number, so an incomplete drain cannot read as `incorrect` |
 | 12 drained run | case 11 with the default drain limit | `drained` true, `drain_seconds` ≥ 2, delivery 100%, `unaccounted` 0 |
 | 13 extra topic | case 5 with `--extra-topic-rate 10` | home counts unchanged (5,000 published, 95,000 delivered). `extra_sent` 100 (10/s × 10 s), `extra_expected` 20,000 (100 × 200), `extra_delivery_pct` 100%, `unaccounted` 0 |
+| 14 unacknowledged subscriptions | case 5 against `--drop-subscribe-acks 10` | `subscribe_failed` 20 (every 10th of 200 setup acks). `misrouted` > 0, because the server did subscribe those sockets, so the run is `incorrect` twice over |
+| 15 unacknowledged churn | case 10 against `--drop-unsubscribe-acks 10` | each churner makes 50 operations (5/s × 10 s), half of them unsubscribes: 500 in total, so `churn_failed` 50 |
 
 **`bench.sh`**
 
@@ -120,7 +126,7 @@ The existing cases 1 to 4 run under both protocols at `T = 1` with their current
 - **Verdict.** `offered()` becomes `senders × rate × (conns / topics − 1)`, where `conns` is `--connections` without churners. A new verdict, `incorrect`, applies when any of these holds, and it overrides every other verdict, because a fast run that routes wrongly is not a performance result:
   - `misrouted > 0`;
   - `subscribe_failed > 0`;
-  - `unaccounted > 0` on a drained run;
+  - `unaccounted ≠ 0` on a drained run: positive means frames lost without a warning, negative means more frames reported dropped than were lost;
   - `churn_failed > 0` on a drained run.
 
   A `null` meter never triggers it. An undrained run gets the usual verdict (typically `cliff` or `harness-bound`) with `undrained` printed next to it.
@@ -145,7 +151,7 @@ Under `topics`, the publisher never sends to its own inbox (`roteia-por-topico` 
 
 The `perf-check` skill already states that a change to `loadgen` or `refserver` invalidates every baseline taken with the old one. So this change:
 
-1. passes `scripts/calibrate.sh` (cases 1–13);
+1. passes `scripts/calibrate.sh` (cases 1–15);
 2. runs `scripts/bench.sh --all --protocol legacy` against the current gateway on `main`;
 3. replaces the 2026-08-03 rows in *Measured baselines* with the new rows, with hardware, profile, commit and invocation. The 2026-08-03 rows move to a subsection titled as measured with the previous harness;
 4. rewrites *Status* from the new rows.

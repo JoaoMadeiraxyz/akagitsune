@@ -543,10 +543,12 @@ async fn read_loop(
     let mut stats = Received::default();
     let clock = shared.clock;
     let mut last_stored: u64 = 0;
+    let stopped = stop.changed();
+    tokio::pin!(stopped);
 
     loop {
         tokio::select! {
-            _ = stop.changed() => break,
+            _ = &mut stopped => break,
 
             frame = source.next() => {
                 let arrived = clock.micros_since_start(Instant::now());

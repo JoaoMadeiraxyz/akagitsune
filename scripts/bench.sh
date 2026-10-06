@@ -14,10 +14,6 @@
 # --goal    performance-goal and stretch scenarios only (see docs/architecture.md)
 # --all     baseline sweep plus goal and stretch scenarios
 # default   baseline sweep (latency/cost at known loads, plus the cliff row)
-#
-# --protocol legacy (default) drives today's gateway; topics drives topic routing.
-# Scenarios that need topics (topics > 1, an extra topic or churn) are skipped
-# under legacy with a printed line.
 
 set -euo pipefail
 
@@ -175,7 +171,7 @@ for scenario in "${SCENARIOS[@]}"; do
     BINARY=false
     case " ${FLAGS:-} " in *" --binary "*) BINARY=true ;; esac
     CHURN=$(flag_value --churn 0 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"})
-    CHURN_RATE=$(flag_value --churn-rate 0 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"})
+    CHURN_RATE=$(flag_value --churn-rate 1 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"})
     EXTRA_RATE=$(flag_value --extra-topic-rate 0 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"})
     EXTRA_SOCKETS=0
     [ "$EXTRA_RATE" -gt 0 ] && EXTRA_SOCKETS=1
@@ -275,6 +271,7 @@ if [ "$GOAL" -eq 1 ] || [ "$ALL" -eq 1 ]; then
     function offered(senders, rate, conns, topics) { return senders * rate * (conns / topics - 1) }
     function num(x) { return x + 0 }
     function positive(x) { return x != "null" && x != "" && x + 0 > 0 }
+    function nonzero(x) { return x != "null" && x != "" && x + 0 != 0 }
     {
         name = v("scenario")
         thru = num(v("throughput_msg_s")); p99 = num(v("service_p99_ms")); delivery = num(v("delivery_pct"))
@@ -292,7 +289,7 @@ if [ "$GOAL" -eq 1 ] || [ "$ALL" -eq 1 ]; then
         is_beyond = (index(name, "beyond-") == 1)
 
         if (positive(v("misrouted")) || positive(v("subscribe_failed")) || \
-            (drained && (positive(v("unaccounted")) || positive(v("churn_failed"))))) {
+            (drained && (nonzero(v("unaccounted")) || positive(v("churn_failed"))))) {
             verdict = "incorrect"
         } else if (p99 <= 20.0 && delivery >= 99.9 && warnings == 0 && rate_held == 1 && thru >= off * 0.999) {
             verdict = "pass"
@@ -328,7 +325,8 @@ if [ "$GOAL" -eq 1 ] || [ "$ALL" -eq 1 ]; then
         print "stretch: " beyond_pass + 0 " of " beyond_total + 0 " beyond-* scenarios within SLO"
         print ""
         print "incorrect     = misrouted, unacknowledged subscriptions, or (after a full drain) frames"
-        print "                lost without a warning or unacknowledged churn; overrides everything"
+        print "                lost without a warning, more reported dropped than lost, or"
+        print "                unacknowledged churn; overrides everything"
         print "pass          = offered load held, delivery ≥ 99.9%, service p99 ≤ 20 ms, warnings 0"
         print "harness-bound = generator did not sustain the requested publish rate (or dwarfed gateway CPU)"
         print "cliff         = delivery below 99.9% or non-zero warnings"
