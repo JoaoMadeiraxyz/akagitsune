@@ -23,8 +23,7 @@ const QUEUE_CAPACITY: usize = 4096;
 const USAGE: &str = "\
 refserver — deterministic reference server for calibrating loadgen
 
-Speaks the gateway's wire protocol, either the legacy one (every frame to every
-other connection) or the topic one (subscribe, unsubscribe, publish, binary topic
+Speaks the gateway's wire protocol (subscribe, unsubscribe, publish, binary topic
 header), but with behaviour chosen on purpose, so every metric loadgen reports
 has a known correct answer. It is a measuring instrument, not a gateway
 implementation: topics are routed through one bus with a per-connection filter,
@@ -35,17 +34,16 @@ USAGE:
 
 OPTIONS:
     --port <N>             listen port  [default: 3100]
-    --protocol <P>         legacy or topics  [default: legacy]
     --delay-ms <D>         hold every delivery for exactly D ms  [default: 0]
     --drop-1-in <K>        discard every Kth delivery per subscriber  [default: 0]
     --warn-drops           report each discarded delivery with a warning frame
-    --ignore-topics        topics only: deliver every publish to every connection
-    --drop-subscribe-acks <K>    topics only: withhold every Kth subscribed reply,
+    --ignore-topics        deliver every publish to every connection
+    --drop-subscribe-acks <K>    withhold every Kth subscribed reply,
                                  counted across all connections  [default: 0]
-    --drop-unsubscribe-acks <K>  topics only: withhold every Kth unsubscribed reply,
+    --drop-unsubscribe-acks <K>  withhold every Kth unsubscribed reply,
                                  counted across all connections  [default: 0]
 
-Under topics, a connection that falls behind the internal bus aborts the
+A connection that falls behind the internal bus aborts the
 process: the bus carries every topic, so its lag count cannot say how many of
 the skipped frames were meant for that connection, and a reference that
 reported a wrong count would be worse than one that stops.
@@ -62,14 +60,7 @@ client's. With --delay-ms, the time each delivery was actually held (the OS
 timer can overshoot the requested delay) is printed as `hold_p50_ms` and
 `hold_p99_ms`, so calibration compares the client against what the server did.";
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Protocol {
-    Legacy,
-    Topics,
-}
-
 struct Behaviour {
-    protocol: Protocol,
     delay: Duration,
     drop_1_in: u64,
     warn_drops: bool,
@@ -95,7 +86,7 @@ impl Behaviour {
 #[derive(Clone)]
 struct Fanout {
     source: Uuid,
-    topic: Option<Arc<str>>,
+    topic: Arc<str>,
     frame: Message,
 }
 
@@ -233,30 +224,18 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                     Ok(fanout) if fanout.source == id => continue,
                     Ok(fanout) => fanout,
                     Err(broadcast::error::RecvError::Lagged(dropped)) => {
-                        if behaviour.protocol == Protocol::Topics {
-                            eprintln!(
-                                "refserver: a connection fell {dropped} frames behind the internal bus; \
-                                 the calibration load is too high for this reference"
-                            );
-                            std::process::exit(3);
-                        }
-                        if queue_tx.send((Instant::now(), warning(dropped))).await.is_err() {
-                            return;
-                        }
-                        continue;
+                        eprintln!(
+                            "refserver: a connection fell {dropped} frames behind the internal bus; \
+                             the calibration load is too high for this reference"
+                        );
+                        std::process::exit(3);
                     }
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
             };
 
-            if behaviour.protocol == Protocol::Topics && !behaviour.ignore_topics {
-                let subscribed = fanout
-                    .topic
-                    .as_ref()
-                    .is_some_and(|topic| topics.contains(topic));
-                if !subscribed {
-                    continue;
-                }
+            if !behaviour.ignore_topics && !topics.contains(&fanout.topic) {
+                continue;
             }
 
             let arrival = Instant::now();
@@ -298,7 +277,6 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
 
     let read_state = Arc::clone(&state);
     let mut reader = tokio::spawn(async move {
-        let protocol = read_state.behaviour.protocol;
         loop {
             read_state.behaviour.wait_out_stall().await;
 
@@ -306,26 +284,9 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                 break;
             };
 
-            let fanout = match (protocol, message) {
-                (_, Message::Close(_)) => break,
-                (Protocol::Legacy, Message::Text(text)) => {
-                    match serde_json::from_str::<&RawValue>(&text) {
-                        Ok(data) => Fanout {
-                            source: id,
-                            topic: None,
-                            frame: to_text(format!(
-                                "{{\"type\":\"message\",\"from\":\"{id}\",\"data\":{data}}}"
-                            )),
-                        },
-                        Err(_) => continue,
-                    }
-                }
-                (Protocol::Legacy, Message::Binary(bytes)) => Fanout {
-                    source: id,
-                    topic: None,
-                    frame: Message::Binary(bytes),
-                },
-                (Protocol::Topics, Message::Text(text)) => {
+            let fanout = match message {
+                Message::Close(_) => break,
+                Message::Text(text) => {
                     let Ok(frame) = serde_json::from_str::<ClientFrame>(&text) else {
                         continue;
                     };
@@ -340,7 +301,7 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                             );
                             let _ = tx.send(Fanout {
                                 source: id,
-                                topic: Some(topic),
+                                topic,
                                 frame: to_text(envelope),
                             });
                             continue;
@@ -352,13 +313,13 @@ async fn serve(mut socket: WebSocket, state: Arc<RefState>) {
                     }
                     continue;
                 }
-                (Protocol::Topics, Message::Binary(bytes)) => {
+                Message::Binary(bytes) => {
                     let Some((topic, frame)) = binary_fanout(id, &bytes) else {
                         continue;
                     };
                     Fanout {
                         source: id,
-                        topic: Some(topic),
+                        topic,
                         frame,
                     }
                 }
@@ -388,14 +349,6 @@ async fn main() -> std::io::Result<()> {
     }
 
     let port: u16 = flag("--port", 3100);
-    let protocol = match flag("--protocol", "legacy".to_string()).as_str() {
-        "legacy" => Protocol::Legacy,
-        "topics" => Protocol::Topics,
-        other => {
-            eprintln!("--protocol: expected legacy or topics, got {other:?}");
-            std::process::exit(2);
-        }
-    };
     let switch = |name: &str| std::env::args().any(|a| a == name);
     let warn_drops = switch("--warn-drops");
     let ignore_topics = switch("--ignore-topics");
@@ -419,7 +372,6 @@ async fn main() -> std::io::Result<()> {
         subscribe_acks: AtomicU64::new(0),
         unsubscribe_acks: AtomicU64::new(0),
         behaviour: Behaviour {
-            protocol,
             delay: Duration::from_millis(delay_ms),
             drop_1_in,
             warn_drops,
@@ -454,12 +406,8 @@ async fn main() -> std::io::Result<()> {
 
     let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     eprintln!(
-        "refserver on ws://127.0.0.1:{port}/ws  protocol={} delay={delay_ms}ms drop_1_in={drop_1_in} \
+        "refserver on ws://127.0.0.1:{port}/ws  delay={delay_ms}ms drop_1_in={drop_1_in} \
          warn_drops={warn_drops} ignore_topics={ignore_topics} stall={stall_ms}ms@{stall_at}s",
-        match protocol {
-            Protocol::Legacy => "legacy",
-            Protocol::Topics => "topics",
-        }
     );
 
     let app = Router::new().route("/ws", get(handler)).with_state(state);

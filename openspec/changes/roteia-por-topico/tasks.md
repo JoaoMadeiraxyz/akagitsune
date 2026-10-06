@@ -37,8 +37,8 @@
 
 This section requires `prepara-harness-para-topicos` to be merged (see `design.md` decision 10).
 
-- [ ] 5.1 Make `topics` the default protocol in `examples/loadgen.rs`, `examples/refserver.rs` and `scripts/bench.sh`. Delete the `legacy` protocol, its `null` rules and its runs in `scripts/calibrate.sh`
-- [ ] 5.2 Run `scripts/calibrate.sh` and get every case green before measuring the gateway. If a case fails, fix the harness rather than widen a tolerance
+- [x] 5.1 Make `topics` the default protocol in `examples/loadgen.rs`, `examples/refserver.rs` and `scripts/bench.sh`. Delete the `legacy` protocol, its `null` rules and its runs in `scripts/calibrate.sh`
+- [x] 5.2 Run `scripts/calibrate.sh` and get every case green before measuring the gateway. If a case fails, fix the harness rather than widen a tolerance
 
 ## 6. Documentation
 
