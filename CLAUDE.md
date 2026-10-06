@@ -21,9 +21,9 @@ When a change is borderline, **stop and ask the user**. Do not decide silently.
 
 ## Hard rules
 
-- **Never deserialize the payload.** Text frames are validated as JSON via
-  `serde_json::from_str::<&RawValue>` and embedded verbatim. Never `Value`,
-  never a typed struct, never a field lookup.
+- **Never deserialize the payload.** The control frame is parsed, and `data` is
+  validated as JSON via `&RawValue` and embedded verbatim. Never `Value`, never
+  a typed struct for `data`, never a field lookup inside it.
 - **Never introduce domain vocabulary.** No `username`, `room name`, `chat`,
   `notification`, `player`. Connections have UUIDs; that is the only identity.
 - **No comments in code.** Not doc comments, not inline. Rationale goes in
@@ -31,8 +31,8 @@ When a change is borderline, **stop and ask the user**. Do not decide silently.
   intent instead.
 - **Serialize once.** The sender builds the envelope one time; subscribers only
   clone a refcounted buffer. Never serialize per receiver.
-- **No locks on the hot path.** Shared state is one `AtomicUsize`. Never hold a
-  lock across `.await`.
+- **Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`.**
+  Shared state is the `AtomicUsize` and the lock-free topic registry.
 - **Every protocol behavior gets an integration test** in `tests/gateway.rs`.
 - **`clippy -D warnings` must be clean**, including `--all-targets`.
 
@@ -52,8 +52,9 @@ scripts/bench.sh --all
 
 | Path                 | Responsibility                       |
 | -------------------- | ------------------------------------ |
-| `src/protocol.rs`    | Frames the gateway emits             |
-| `src/state.rs`       | Shared state and the broadcast bus   |
+| `src/protocol.rs`    | Control frames and binary header     |
+| `src/registry.rs`    | Topic registry and subscriptions     |
+| `src/state.rs`       | Shared state                         |
 | `src/ws.rs`          | Connection lifecycle and tasks       |
 | `src/lib.rs`         | Router and `run`                     |
 | `src/main.rs`        | Config, logging, shutdown            |
