@@ -48,11 +48,19 @@ start_ref() {
     wait_for_port "$port" 15
 }
 
+CASE_STARTED=$SECONDS
+
+start_case() {
+    CASE_STARTED=$SECONDS
+    echo "=== $PROTO $1 ==="
+}
+
 stop_ref() {
     sleep 1.5
     kill "$REF_PID" 2>/dev/null || true
     wait "$REF_PID" 2>/dev/null || true
     REF_PID=""
+    echo "    took $((SECONDS - CASE_STARTED))s"
 }
 
 ref_deliveries() {
@@ -120,7 +128,7 @@ TOPIC_ARGS=(--connections "$TOPIC_CONNS" --topics "$TOPIC_COUNT" --senders "$TOP
     --rate "$RATE" --seconds "$SECS" --warmup "$WARMUP")
 
 for PROTO in legacy topics; do
-    echo "=== $PROTO case 1: counting, throughput and delivery (no delay, no loss) ==="
+    start_case "case 1: counting, throughput and delivery (no delay, no loss)"
     PORT=3101
     start_ref "$PORT"
     CASE1=$(loadgen "$PORT" --connections "$CONNS" --senders "$SENDERS" --rate "$RATE" \
@@ -143,7 +151,7 @@ for PROTO in legacy topics; do
     note "case1 response p50 ms" "$(json_field "$CASE1" response_p50_ms)"
     note "case1 generator slip mean ms" "$(json_field "$CASE1" slip_mean_ms)"
 
-    echo "=== $PROTO case 9: case 1 with binary frames ==="
+    start_case "case 9: case 1 with binary frames"
     PORT=3109
     start_ref "$PORT"
     CASE9=$(loadgen "$PORT" --connections "$CONNS" --senders "$SENDERS" --rate "$RATE" \
@@ -156,7 +164,7 @@ for PROTO in legacy topics; do
     assert "case9 malformed frames" 0 "$(json_field "$CASE9" malformed)" 0 abs
     assert "case9 unaccounted" 0 "$(json_field "$CASE9" unaccounted)" 0 abs
 
-    echo "=== $PROTO case 2: known 50ms delivery delay, low load so the timer is not the bottleneck ==="
+    start_case "case 2: known 50ms delivery delay, low load so the timer is not the bottleneck"
     PORT=3102
     start_ref "$PORT" --delay-ms 50
     CASE2=$(loadgen "$PORT" --connections 20 --senders 1 --rate 20 --seconds 12 --warmup 2)
@@ -170,7 +178,7 @@ for PROTO in legacy topics; do
         "$(awk -v p="$(json_field "$CASE2" service_p50_ms)" 'BEGIN{printf "%.3f", p - 50}')"
     note "case2 response p50 ms" "$(json_field "$CASE2" response_p50_ms)"
 
-    echo "=== $PROTO cases 3 and 7: known silent loss, one delivery in ten discarded ==="
+    start_case "cases 3 and 7: known silent loss, one delivery in ten discarded"
     PORT=3103
     start_ref "$PORT" --drop-1-in 10
     CASE3=$(loadgen "$PORT" --connections 100 --senders 5 --rate 50 --seconds 12 --warmup 2)
@@ -184,20 +192,25 @@ for PROTO in legacy topics; do
     assert "case7 unaccounted % of scope expected" 10 \
         "$(pct_of "$(json_field "$CASE3" unaccounted)" "$(json_field "$CASE3" scope_expected)")" 0.2 abs
 
-    echo "=== $PROTO case 8: the same loss, reported with warnings ==="
+    start_case "case 8: the same loss, reported with warnings"
     PORT=3108
     start_ref "$PORT" --drop-1-in 10 --warn-drops
     CASE8=$(loadgen "$PORT" --connections 100 --senders 5 --rate 50 --seconds 12 --warmup 2)
     stop_ref
 
     assert "case8 delivery %" 90 "$(json_field "$CASE8" delivery_pct)" 0.2 abs
-    assert "case8 dropped % of scope expected" 10 \
-        "$(pct_of "$(json_field "$CASE8" dropped)" "$(json_field "$CASE8" scope_expected)")" 0.5 abs
+    if [ "$PROTO" = legacy ]; then
+        DROPPED_PCT_EXP=$(awk 'BEGIN { printf "%.4f", 10 * 99 / 95 }')
+    else
+        DROPPED_PCT_EXP=10
+    fi
+    assert "case8 dropped % of scope expected" "$DROPPED_PCT_EXP" \
+        "$(pct_of "$(json_field "$CASE8" dropped)" "$(json_field "$CASE8" scope_expected)")" 0.2 abs
     assert "case8 unaccounted" 0 "$(json_field "$CASE8" unaccounted)" 0 abs
 
     # No single frame can absorb the whole freeze: the worst-placed one still arrives up to one
     # inter-arrival gap after the freeze began, so the predicted floor is 500ms - 2.5ms, not 500ms.
-    echo "=== $PROTO case 4: 500ms freeze mid-window, publishers back-pressured ==="
+    start_case "case 4: 500ms freeze mid-window, publishers back-pressured"
     PORT=3104
     start_ref "$PORT" --stall-at 8 --stall-ms 500
     CASE4=$(loadgen "$PORT" --connections 10 --senders 2 --rate 200 --payload-bytes 32768 \
@@ -210,7 +223,7 @@ for PROTO in legacy topics; do
     note "case4 response p99 ms" "$(json_field "$CASE4" response_p99_ms)"
     note "case4 delivery %" "$(json_field "$CASE4" delivery_pct)"
 
-    echo "=== $PROTO case 11: 2s delivery delay with a 500ms drain limit must not drain ==="
+    start_case "case 11: 2s delivery delay with a 500ms drain limit must not drain"
     PORT=3111
     start_ref "$PORT" --delay-ms 2000
     CASE11=$(loadgen "$PORT" --connections 20 --senders 1 --rate 20 --seconds 12 --warmup 2 \
@@ -221,7 +234,7 @@ for PROTO in legacy topics; do
     assert "case11 unaccounted is null" null "$(json_field "$CASE11" unaccounted)" 0 null
     assert "case11 churn_failed is null" null "$(json_field "$CASE11" churn_failed)" 0 null
 
-    echo "=== $PROTO case 12: the same delay with the default drain limit drains fully ==="
+    start_case "case 12: the same delay with the default drain limit drains fully"
     PORT=3112
     start_ref "$PORT" --delay-ms 2000
     CASE12=$(loadgen "$PORT" --connections 20 --senders 1 --rate 20 --seconds 12 --warmup 2)
@@ -236,7 +249,7 @@ for PROTO in legacy topics; do
         continue
     fi
 
-    echo "=== $PROTO case 5: ten topics of twenty, one sender each ==="
+    start_case "case 5: ten topics of twenty, one sender each"
     PORT=3105
     start_ref "$PORT"
     CASE5=$(loadgen "$PORT" "${TOPIC_ARGS[@]}")
@@ -250,7 +263,7 @@ for PROTO in legacy topics; do
     assert "case5 subscribe_failed" 0 "$(json_field "$CASE5" subscribe_failed)" 0 abs
     note "case5 subscribe ack p99 ms" "$(json_field "$CASE5" subscribe_ack_p99_ms)"
 
-    echo "=== $PROTO case 6: case 5 against a server that ignores topics ==="
+    start_case "case 6: case 5 against a server that ignores topics"
     PORT=3106
     start_ref "$PORT" --ignore-topics
     CASE6=$(loadgen "$PORT" "${TOPIC_ARGS[@]}")
@@ -260,7 +273,7 @@ for PROTO in legacy topics; do
     assert "case6 delivery %" 100 "$(json_field "$CASE6" delivery_pct)" 0.01 abs
     assert "case6 misrouted" "$TOPIC_MISROUTED_EXP" "$(json_field "$CASE6" misrouted)" 0 abs
 
-    echo "=== $PROTO case 10: case 5 with twenty churning sockets ==="
+    start_case "case 10: case 5 with twenty churning sockets"
     PORT=3110
     start_ref "$PORT"
     CASE10=$(loadgen "$PORT" "${TOPIC_ARGS[@]}" --churn 20 --churn-rate 5)
@@ -271,7 +284,7 @@ for PROTO in legacy topics; do
     assert "case10 churn_failed" 0 "$(json_field "$CASE10" churn_failed)" 0 abs
     assert "case10 misrouted" 0 "$(json_field "$CASE10" misrouted)" 0 abs
 
-    echo "=== $PROTO case 13: case 5 with an extra quiet topic every socket joins ==="
+    start_case "case 13: case 5 with an extra quiet topic every socket joins"
     PORT=3113
     start_ref "$PORT"
     CASE13=$(loadgen "$PORT" "${TOPIC_ARGS[@]}" --extra-topic-rate "$EXTRA_RATE")
