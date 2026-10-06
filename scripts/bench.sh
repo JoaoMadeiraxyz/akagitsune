@@ -7,7 +7,7 @@
 # gateway, samples the server's RSS and CPU alongside, and writes a CSV plus a
 # markdown table shaped for the Measured baselines section of docs/architecture.md.
 #
-# USAGE: scripts/bench.sh [--quick] [--goal] [--all] [--protocol legacy|topics]
+# USAGE: scripts/bench.sh [--quick] [--goal] [--all]
 #                         [--skip-calibration] [--port <N>]
 #
 # --quick   one cheap fanout run
@@ -22,7 +22,6 @@ cd "$(dirname "$0")/.."
 source scripts/lib.sh
 
 PORT=3000
-PROTOCOL=legacy
 QUICK=0
 GOAL=0
 ALL=0
@@ -35,15 +34,9 @@ while [ $# -gt 0 ]; do
         --all) ALL=1; shift ;;
         --skip-calibration) SKIP_CALIBRATION=1; shift ;;
         --port) PORT=$2; shift 2 ;;
-        --protocol) PROTOCOL=$2; shift 2 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
 done
-
-case $PROTOCOL in
-    legacy | topics) ;;
-    *) echo "--protocol must be legacy or topics" >&2; exit 2 ;;
-esac
 
 MODE_COUNT=$((QUICK + GOAL + ALL))
 if [ "$MODE_COUNT" -gt 1 ]; then
@@ -104,16 +97,6 @@ else
     SCENARIOS=("${BASELINE_SCENARIOS[@]}")
 fi
 
-needs_topics() {
-    local topics=$1
-    shift
-    [ "$topics" -gt 1 ] && return 0
-    case " $* " in
-        *" --extra-topic-rate "* | *" --churn "*) return 0 ;;
-    esac
-    return 1
-}
-
 flag_value() {
     local name=$1 default=$2
     shift 2
@@ -153,7 +136,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HEADER="scenario,protocol,connections,topics,senders,rate,payload_bytes,seconds,binary,churn,churn_rate,extra_topic_rate"
+HEADER="scenario,connections,topics,senders,rate,payload_bytes,seconds,binary,churn,churn_rate,extra_topic_rate"
 for field in "${STATS_FIELDS[@]}"; do
     HEADER="$HEADER,$field"
 done
@@ -162,12 +145,6 @@ echo "$HEADER,idle_rss_mib,peak_rss_mib,rss_per_conn_kib,gateway_cpu_pct,loadgen
 for scenario in "${SCENARIOS[@]}"; do
     read -r NAME CONNS TOPICS SENDERS RATE PAYLOAD SECS FLAGS <<<"$scenario"
     read -r -a EXTRA_FLAGS <<<"${FLAGS:-}"
-    if [ "$PROTOCOL" = legacy ] && needs_topics "$TOPICS" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"}; then
-        echo "### $NAME: skipped, needs --protocol topics"
-        echo
-        continue
-    fi
-
     BINARY=false
     case " ${FLAGS:-} " in *" --binary "*) BINARY=true ;; esac
     CHURN=$(flag_value --churn 0 ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"})
@@ -178,7 +155,7 @@ for scenario in "${SCENARIOS[@]}"; do
     OPEN_CONNS=$((CONNS + CHURN + EXTRA_SOCKETS))
     require_fds "$OPEN_CONNS"
 
-    echo "### $NAME: $CONNS connections, $TOPICS topic(s), $SENDERS senders, $RATE/s, ${PAYLOAD}B padding, ${SECS}s, $PROTOCOL ${FLAGS:-}"
+    echo "### $NAME: $CONNS connections, $TOPICS topic(s), $SENDERS senders, $RATE/s, ${PAYLOAD}B padding, ${SECS}s ${FLAGS:-}"
 
     GATEWAY_ADDR="127.0.0.1:$PORT" RUST_LOG=warn "$GATEWAY" >"$WORK/gateway.log" 2>&1 &
     GATEWAY_PID=$!
@@ -189,7 +166,7 @@ for scenario in "${SCENARIOS[@]}"; do
     : >"$WORK/gateway.samples"
     : >"$WORK/loadgen.samples"
 
-    "$LOADGEN" --url "ws://127.0.0.1:$PORT/ws" --protocol "$PROTOCOL" --connections "$CONNS" \
+    "$LOADGEN" --url "ws://127.0.0.1:$PORT/ws" --connections "$CONNS" \
         --topics "$TOPICS" --senders "$SENDERS" --rate "$RATE" --payload-bytes "$PAYLOAD" \
         --seconds "$SECS" ${EXTRA_FLAGS[@]+"${EXTRA_FLAGS[@]}"} --json \
         >"$WORK/result.json" 2>"$WORK/loadgen.log" &
@@ -218,7 +195,7 @@ for scenario in "${SCENARIOS[@]}"; do
     PER_CONN=$(awk -v idle="$IDLE_RSS" -v peak="$PEAK_RSS" -v n="$OPEN_CONNS" \
         'BEGIN{printf "%.1f", (peak - idle) * 1024 / n}')
 
-    ROW="$NAME,$PROTOCOL,$CONNS,$TOPICS,$SENDERS,$RATE,$PAYLOAD,$SECS,$BINARY,$CHURN,$CHURN_RATE,$EXTRA_RATE"
+    ROW="$NAME,$CONNS,$TOPICS,$SENDERS,$RATE,$PAYLOAD,$SECS,$BINARY,$CHURN,$CHURN_RATE,$EXTRA_RATE"
     for field in "${STATS_FIELDS[@]}"; do
         ROW="$ROW,$(json_field "$RESULT" "$field")"
     done
@@ -246,8 +223,8 @@ function invocation(   flags) {
     if (v("binary") == "true") flags = flags " --binary"
     if (v("extra_topic_rate") + 0 > 0) flags = flags " --extra-topic-rate " v("extra_topic_rate")
     if (v("churn") + 0 > 0) flags = flags " --churn " v("churn") " --churn-rate " v("churn_rate")
-    return sprintf("--protocol %s --connections %s --topics %s --senders %s --rate %s --payload-bytes %s --seconds %s%s", \
-        v("protocol"), v("connections"), v("topics"), v("senders"), v("rate"), v("payload_bytes"), v("seconds"), flags)
+    return sprintf("--connections %s --topics %s --senders %s --rate %s --payload-bytes %s --seconds %s%s", \
+        v("connections"), v("topics"), v("senders"), v("rate"), v("payload_bytes"), v("seconds"), flags)
 }'
 
 echo "| Date | Commit | Scenario | Invocation | Throughput | service p50 | service p99 | Delivery | Warnings | Misrouted | Unaccounted |"
@@ -270,8 +247,6 @@ if [ "$GOAL" -eq 1 ] || [ "$ALL" -eq 1 ]; then
     awk -F, "$COLUMNS_AWK"'
     function offered(senders, rate, conns, topics) { return senders * rate * (conns / topics - 1) }
     function num(x) { return x + 0 }
-    function positive(x) { return x != "null" && x != "" && x + 0 > 0 }
-    function nonzero(x) { return x != "null" && x != "" && x + 0 != 0 }
     {
         name = v("scenario")
         thru = num(v("throughput_msg_s")); p99 = num(v("service_p99_ms")); delivery = num(v("delivery_pct"))
@@ -288,8 +263,8 @@ if [ "$GOAL" -eq 1 ] || [ "$ALL" -eq 1 ]; then
         is_goal = (index(name, "goal-1m-") == 1)
         is_beyond = (index(name, "beyond-") == 1)
 
-        if (positive(v("misrouted")) || positive(v("subscribe_failed")) || \
-            (drained && (nonzero(v("unaccounted")) || positive(v("churn_failed"))))) {
+        if (num(v("misrouted")) > 0 || num(v("subscribe_failed")) > 0 || \
+            (drained && (num(v("unaccounted")) != 0 || num(v("churn_failed")) > 0))) {
             verdict = "incorrect"
         } else if (p99 <= 20.0 && delivery >= 99.9 && warnings == 0 && rate_held == 1 && thru >= off * 0.999) {
             verdict = "pass"

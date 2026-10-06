@@ -26,14 +26,16 @@ The failure mode this project has actually hit.
 
 ## 2. Correctness
 
-- **`.await` while holding a lock.** Currently there are no locks; if the diff
-  introduces one, this becomes live. `std::sync` guards must not cross an await.
+- **Locks in gateway code.** Gateway code uses no locks; short internal locks
+  inside tokio channels are allowed. If the diff introduces a lock of its own,
+  that is a violation, and `.await` while holding one is worse. `std::sync`
+  guards must not cross an await.
 - **`unwrap`/`expect` on client-controlled input.** `to_text` uses `expect` only
   because `ServerMessage` is provably infallible to serialize. Anything derived
   from a frame must be handled.
 - **Task lifecycle.** Every spawned task must be reachable by the `select!` and
   the aborts in `handle_socket`. A task that outlives the connection is a leak.
-- **Broadcast errors handled.** `tx.send` returning `Err` and `recv` returning
+- **Inbox errors handled.** `inbox.send` returning `Err` and `recv` returning
   `Lagged`/`Closed` all need explicit arms.
 - **Backpressure preserved.** Bounded channels stay bounded. An unbounded
   channel or a `Vec` that accumulates per connection is a memory bug waiting for
@@ -47,13 +49,14 @@ Check against the invariants in `docs/architecture.md`:
 
 - Payload never deserialized.
 - Envelope serialized once by the publisher, never per receiver.
-- Cloning a `BroadcastMessage` stays a refcount bump — no `to_vec`,
+- Cloning a `Message` in the fanout stays a refcount bump — no `to_vec`,
   `to_string`, `clone()` on the underlying bytes.
 - No allocation added per receiver per message.
-- No lock, no syscall, no logging with formatting cost added inside the fanout
-  loop.
+- No lock in gateway code, no syscall, no logging with formatting cost added
+  inside the fanout loop.
 
-If the diff touches the reader, the bridge, or `BroadcastMessage`, run the
+If the diff touches the reader, the writer, the registry fanout, or
+`INBOX_CAPACITY`, run the
 `perf-check` skill rather than guessing.
 
 ## 4. Tests

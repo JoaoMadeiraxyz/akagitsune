@@ -21,7 +21,6 @@ const DRAIN_POLL: Duration = Duration::from_millis(20);
 const ARRIVAL_STAMP_STEP_MICROS: u64 = 10_000;
 const EXTRA_TOPIC: &str = "t-extra";
 const CHURN_TOPIC: &str = "t-0";
-const LEGACY_TOPIC: &str = "";
 const USAGE: &str = "\
 loadgen — measure realtime-gateway throughput, latency, delivery, routing and backpressure
 
@@ -30,9 +29,8 @@ USAGE:
 
 OPTIONS:
     --url <URL>               gateway endpoint  [default: ws://127.0.0.1:3000/ws]
-    --protocol <P>            legacy (bare JSON, global relay) or topics  [default: legacy]
     --connections <N>         measured sockets to open  [default: 100]
-    --topics <T>              topics the measured sockets are split across; topics only  [default: 1]
+    --topics <T>              topics the measured sockets are split across  [default: 1]
     --senders <N>             how many measured sockets publish  [default: 5]
     --rate <N>                messages per second per sender  [default: 50]
     --seconds <N>             total send window, warmup included  [default: 15]
@@ -66,7 +64,7 @@ Correctness meters:
     misrouted    frames on a topic the receiver did not subscribe to; must be 0
     dropped      the sum of every warning's dropped count
     unaccounted  expected − received − dropped over the whole run, for sockets
-                 that stayed open (legacy: only sockets that do not publish);
+                 that stayed open;
                  null unless drained; must be 0
     subscribe_failed  setup subscriptions never acknowledged; must be 0
     churn_failed      churn operations never acknowledged after a full drain
@@ -161,33 +159,6 @@ impl Histogram {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Protocol {
-    Legacy,
-    Topics,
-}
-
-impl FromStr for Protocol {
-    type Err = ();
-
-    fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        match raw {
-            "legacy" => Ok(Self::Legacy),
-            "topics" => Ok(Self::Topics),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Protocol {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Legacy => "legacy",
-            Self::Topics => "topics",
-        }
-    }
-}
-
 #[derive(Default)]
 struct Received {
     measured: u64,
@@ -260,7 +231,6 @@ struct Shared {
 
 struct Config {
     url: String,
-    protocol: Protocol,
     connections: usize,
     topics: usize,
     senders: usize,
@@ -280,7 +250,6 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             url: "ws://127.0.0.1:3000/ws".to_string(),
-            protocol: Protocol::Legacy,
             connections: 100,
             topics: 1,
             senders: 5,
@@ -319,7 +288,6 @@ fn parse_args() -> Result<Config, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--url" => config.url = next_value(&mut args, "--url")?,
-            "--protocol" => config.protocol = parse_value(&mut args, "--protocol")?,
             "--connections" => config.connections = parse_value(&mut args, "--connections")?,
             "--topics" => config.topics = parse_value(&mut args, "--topics")?,
             "--senders" => config.senders = parse_value(&mut args, "--senders")?,
@@ -361,17 +329,6 @@ fn validate(config: &Config) -> Result<(), String> {
     }
     if config.churn > 0 && config.churn_rate == 0 {
         return Err("--churn-rate must be at least 1".to_string());
-    }
-    if config.protocol == Protocol::Legacy {
-        if config.topics != 1 {
-            return Err("--topics needs --protocol topics".to_string());
-        }
-        if config.churn > 0 {
-            return Err("--churn needs --protocol topics".to_string());
-        }
-        if config.extra_topic_rate > 0 {
-            return Err("--extra-topic-rate needs --protocol topics".to_string());
-        }
     }
     Ok(())
 }
@@ -458,7 +415,6 @@ async fn open(url: String, topics: Vec<String>) -> Result<Joined, String> {
 }
 
 enum Membership {
-    Legacy,
     Topics { home: Option<String>, extra: bool },
     Churn,
 }
@@ -473,7 +429,6 @@ enum Class {
 
 fn classify(membership: &Membership, topic: Option<&[u8]>) -> Class {
     match membership {
-        Membership::Legacy => Class::Home,
         Membership::Topics { home, extra } => match topic {
             Some(topic) if home.as_deref().map(str::as_bytes) == Some(topic) => Class::Home,
             Some(topic) if *extra && topic == EXTRA_TOPIC.as_bytes() => Class::Extra,
@@ -492,15 +447,10 @@ fn read_stamp(bytes: &[u8], at: usize) -> Option<Stamp> {
     Some(Stamp { t, s })
 }
 
-fn parse_binary(protocol: Protocol, bytes: &[u8]) -> Option<(Option<&[u8]>, Stamp)> {
-    match protocol {
-        Protocol::Legacy => Some((None, read_stamp(bytes, 0)?)),
-        Protocol::Topics => {
-            let len = *bytes.first()? as usize;
-            let topic = bytes.get(1..1 + len)?;
-            Some((Some(topic), read_stamp(bytes, 1 + len + 16)?))
-        }
-    }
+fn parse_binary(bytes: &[u8]) -> Option<(&[u8], Stamp)> {
+    let len = *bytes.first()? as usize;
+    let topic = bytes.get(1..1 + len)?;
+    Some((topic, read_stamp(bytes, 1 + len + 16)?))
 }
 
 fn record_delivery(stats: &mut Received, clock: &Clock, class: Class, stamp: Stamp, arrived: u64) {
@@ -536,7 +486,6 @@ fn record_delivery(stats: &mut Received, clock: &Clock, class: Class, stamp: Sta
 async fn read_loop(
     mut source: SplitStream<Socket>,
     shared: Arc<Shared>,
-    protocol: Protocol,
     membership: Membership,
     mut stop: watch::Receiver<bool>,
 ) -> Received {
@@ -587,11 +536,11 @@ async fn read_loop(
                         }
                     }
                     Message::Binary(bytes) => {
-                        let Some((topic, stamp)) = parse_binary(protocol, &bytes) else {
+                        let Some((topic, stamp)) = parse_binary(&bytes) else {
                             stats.malformed += 1;
                             continue;
                         };
-                        let class = classify(&membership, topic);
+                        let class = classify(&membership, Some(topic));
                         record_delivery(&mut stats, &clock, class, stamp, arrived);
                     }
                     Message::Close(_) => {
@@ -608,7 +557,7 @@ async fn read_loop(
 }
 
 struct Publisher {
-    topic: Option<String>,
+    topic: String,
     binary: bool,
     period_micros: u64,
     padding: String,
@@ -617,12 +566,9 @@ struct Publisher {
 impl Publisher {
     fn frame(&self, due: u64, sent: u64, seq: u64, buffer: &mut String) -> Message {
         if self.binary {
-            let topic_len = self.topic.as_ref().map_or(0, |t| 1 + t.len());
-            let mut bytes = Vec::with_capacity(topic_len + 16 + self.padding.len());
-            if let Some(topic) = &self.topic {
-                bytes.push(topic.len() as u8);
-                bytes.extend_from_slice(topic.as_bytes());
-            }
+            let mut bytes = Vec::with_capacity(1 + self.topic.len() + 16 + self.padding.len());
+            bytes.push(self.topic.len() as u8);
+            bytes.extend_from_slice(self.topic.as_bytes());
             bytes.extend_from_slice(&due.to_le_bytes());
             bytes.extend_from_slice(&sent.to_le_bytes());
             bytes.extend_from_slice(self.padding.as_bytes());
@@ -631,17 +577,12 @@ impl Publisher {
 
         buffer.clear();
         let padding = &self.padding;
-        let _ = match &self.topic {
-            Some(topic) => write!(
-                buffer,
-                "{{\"type\":\"publish\",\"topic\":\"{topic}\",\"data\":\
-                 {{\"t\":{due},\"s\":{sent},\"seq\":{seq},\"pad\":\"{padding}\"}}}}"
-            ),
-            None => write!(
-                buffer,
-                "{{\"t\":{due},\"s\":{sent},\"seq\":{seq},\"pad\":\"{padding}\"}}"
-            ),
-        };
+        let topic = &self.topic;
+        let _ = write!(
+            buffer,
+            "{{\"type\":\"publish\",\"topic\":\"{topic}\",\"data\":\
+             {{\"t\":{due},\"s\":{sent},\"seq\":{seq},\"pad\":\"{padding}\"}}}}"
+        );
         Message::text(buffer.as_str())
     }
 }
@@ -736,7 +677,6 @@ struct Outcome {
 async fn run_socket(
     socket: Socket,
     shared: Arc<Shared>,
-    protocol: Protocol,
     membership: Membership,
     action: Action,
     mut stop: watch::Receiver<bool>,
@@ -745,7 +685,6 @@ async fn run_socket(
     let reader = tokio::spawn(read_loop(
         source,
         Arc::clone(&shared),
-        protocol,
         membership,
         stop.clone(),
     ));
@@ -873,10 +812,6 @@ fn expectation(
     expectation
 }
 
-fn in_unaccounted_scope(protocol: Protocol, publishes: bool, closed_early: bool) -> bool {
-    !closed_early && (protocol == Protocol::Topics || !publishes)
-}
-
 enum Role {
     Measured {
         topics: Vec<String>,
@@ -910,11 +845,8 @@ fn text_value(value: &str) -> &str {
     if value == "null" { "n/a" } else { value }
 }
 
-fn home_topic(protocol: Protocol, index: usize, topics: usize) -> String {
-    match protocol {
-        Protocol::Legacy => LEGACY_TOPIC.to_string(),
-        Protocol::Topics => format!("t-{}", index % topics),
-    }
+fn home_topic(index: usize, topics: usize) -> String {
+    format!("t-{}", index % topics)
 }
 
 #[tokio::main]
@@ -932,7 +864,6 @@ async fn main() {
         }
     };
 
-    let protocol = config.protocol;
     let period_micros = 1_000_000 / config.rate;
     let effective_rate = 1_000_000.0 / period_micros as f64;
     let measured_seconds = (config.seconds - config.warmup) as f64;
@@ -943,13 +874,12 @@ async fn main() {
 
     if !config.json {
         eprintln!(
-            "opening {} sockets over {} topic(s) ({} publishing at {:.1}/s, {} B padding, {} protocol{})",
+            "opening {} sockets over {} topic(s) ({} publishing at {:.1}/s, {} B padding{})",
             config.connections,
             config.topics,
             config.senders,
             effective_rate,
             config.payload_bytes,
-            protocol.name(),
             if config.binary { ", binary" } else { "" }
         );
     }
@@ -957,20 +887,13 @@ async fn main() {
     let mut roles = Vec::new();
     let mut joins = Vec::new();
     for i in 0..config.connections {
-        let home = home_topic(protocol, i, config.topics);
-        let mut topics = Vec::new();
-        if protocol == Protocol::Topics {
-            topics.push(home.clone());
-            if has_extra {
-                topics.push(EXTRA_TOPIC.to_string());
-            }
+        let home = home_topic(i, config.topics);
+        let mut topics = vec![home.clone()];
+        if has_extra {
+            topics.push(EXTRA_TOPIC.to_string());
         }
         roles.push(Role::Measured {
-            topics: if protocol == Protocol::Topics {
-                topics.clone()
-            } else {
-                vec![LEGACY_TOPIC.to_string()]
-            },
+            topics: topics.clone(),
             publishes_to: (i < config.senders).then_some(home),
         });
         joins.push(open(config.url.clone(), topics));
@@ -1002,7 +925,7 @@ async fn main() {
                     Role::Measured {
                         topics,
                         publishes_to,
-                    } if protocol == Protocol::Topics => Role::Measured {
+                    } => Role::Measured {
                         topics: topics
                             .into_iter()
                             .filter(|t| joined.acked.contains(t))
@@ -1071,16 +994,13 @@ async fn main() {
                 topics,
                 publishes_to,
             } => {
-                let membership = match protocol {
-                    Protocol::Legacy => Membership::Legacy,
-                    Protocol::Topics => Membership::Topics {
-                        home: topics.iter().find(|t| *t != EXTRA_TOPIC).cloned(),
-                        extra: topics.iter().any(|t| t == EXTRA_TOPIC),
-                    },
+                let membership = Membership::Topics {
+                    home: topics.iter().find(|t| *t != EXTRA_TOPIC).cloned(),
+                    extra: topics.iter().any(|t| t == EXTRA_TOPIC),
                 };
                 let action = match publishes_to {
                     Some(topic) => Action::Publish(Publisher {
-                        topic: (protocol == Protocol::Topics).then(|| topic.clone()),
+                        topic: topic.clone(),
                         binary: config.binary,
                         period_micros,
                         padding: padding.clone(),
@@ -1095,7 +1015,7 @@ async fn main() {
                     extra: false,
                 },
                 Action::Publish(Publisher {
-                    topic: Some(EXTRA_TOPIC.to_string()),
+                    topic: EXTRA_TOPIC.to_string(),
                     binary: config.binary,
                     period_micros: 1_000_000 / config.extra_topic_rate,
                     padding: padding.clone(),
@@ -1117,7 +1037,6 @@ async fn main() {
         tasks.push(tokio::spawn(run_socket(
             socket,
             Arc::clone(&shared),
-            protocol,
             membership,
             action,
             stop_rx.clone(),
@@ -1200,7 +1119,7 @@ async fn main() {
                 expected += expect.home_measured;
                 extra_expected += expect.extra_measured;
                 let closed = outcome.published.closed_early || received.closed_early;
-                if in_unaccounted_scope(protocol, publishes_to.is_some(), closed) {
+                if !closed {
                     scope += 1;
                     scope_expected += expect.all;
                     unaccounted_sum +=
@@ -1215,7 +1134,6 @@ async fn main() {
         }
     }
 
-    let topics_mode = protocol == Protocol::Topics;
     let sent_expected = (div_ceil(send_end_micros, period_micros)
         - div_ceil(warmup_micros, period_micros))
         * config.senders as u64;
@@ -1231,11 +1149,9 @@ async fn main() {
         home_sent.slip_sum as f64 / home_sent.measured as f64
     };
     let unaccounted = (drained && scope > 0).then_some(unaccounted_sum);
-    let churn_failed = (topics_mode && drained).then(|| churn_ops.saturating_sub(churn_acks));
-    let subscribe_failed_out = topics_mode.then_some(subscribe_failed);
-    let misrouted_out = topics_mode.then_some(got.misrouted);
-    let ack_p50 = (topics_mode && ack_hist.count > 0).then(|| ms(ack_hist.percentile(0.50)));
-    let ack_p99 = (topics_mode && ack_hist.count > 0).then(|| ms(ack_hist.percentile(0.99)));
+    let churn_failed = drained.then(|| churn_ops.saturating_sub(churn_acks));
+    let ack_p50 = (ack_hist.count > 0).then(|| ms(ack_hist.percentile(0.50)));
+    let ack_p99 = (ack_hist.count > 0).then(|| ms(ack_hist.percentile(0.99)));
     let extra_sent_out = has_extra.then_some(extra_sent.measured);
     let extra_expected_out = has_extra.then_some(extra_expected);
     let extra_received_out = has_extra.then_some(got.extra_measured);
@@ -1256,7 +1172,7 @@ async fn main() {
              \"response_max_ms\":{:.3},\"response_mean_ms\":{:.3},\
              \"samples\":{},\"slip_mean_ms\":{:.3},\"slip_max_ms\":{:.3},\
              \"warnings\":{},\"errors\":{},\"malformed\":{},\"outside_window\":{},\
-             \"protocol\":\"{}\",\"topics\":{},\"binary\":{},\"churn\":{},\"churn_rate\":{},\
+             \"topics\":{},\"binary\":{},\"churn\":{},\"churn_rate\":{},\
              \"extra_topic_rate\":{},\"subscribe_failed\":{},\"subscribe_ack_p50_ms\":{},\
              \"subscribe_ack_p99_ms\":{},\"misrouted\":{},\"dropped\":{},\"unaccounted\":{},\
              \"unaccounted_scope\":{scope},\"scope_expected\":{scope_expected},\
@@ -1291,16 +1207,15 @@ async fn main() {
             got.errors,
             got.malformed,
             got.outside,
-            protocol.name(),
             config.topics,
             config.binary,
             config.churn,
             config.churn_rate,
             config.extra_topic_rate,
-            json_u64(subscribe_failed_out),
+            subscribe_failed,
             json_f64(ack_p50, 3),
             json_f64(ack_p99, 3),
-            json_u64(misrouted_out),
+            got.misrouted,
             got.dropped,
             json_i64(unaccounted),
             json_u64(churn_failed),
@@ -1353,8 +1268,8 @@ async fn main() {
     println!("errors        {}", got.errors);
     println!(
         "routing       misrouted {}, subscribe_failed {}, subscribe ack p99 {}ms",
-        text_value(&json_u64(misrouted_out)),
-        text_value(&json_u64(subscribe_failed_out)),
+        got.misrouted,
+        subscribe_failed,
         text_value(&json_f64(ack_p99, 3))
     );
     println!(
@@ -1516,16 +1431,16 @@ mod tests {
         let per_sender = published(500, 100);
         let mut sent = HashMap::new();
         sent.insert(
-            LEGACY_TOPIC.to_string(),
+            "t-0".to_string(),
             Sent {
                 measured: senders * 500,
                 all: senders * 600,
             },
         );
-        let topics = topic_names(&[LEGACY_TOPIC]);
+        let topics = topic_names(&["t-0"]);
         let mut total = 0;
         for i in 0..connections {
-            let own = (i < senders).then_some((LEGACY_TOPIC, per_sender));
+            let own = (i < senders).then_some(("t-0", per_sender));
             total += expectation(&topics, own, &sent).home_measured;
         }
         assert_eq!(total, senders * 500 * (connections - 1));
@@ -1587,14 +1502,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_scope_excludes_publishers_and_closed_sockets() {
-        assert!(in_unaccounted_scope(Protocol::Legacy, false, false));
-        assert!(!in_unaccounted_scope(Protocol::Legacy, true, false));
-        assert!(in_unaccounted_scope(Protocol::Topics, true, false));
-        assert!(!in_unaccounted_scope(Protocol::Topics, false, true));
-    }
-
-    #[test]
     fn drain_waits_for_quiet_and_gives_up_at_the_limit() {
         assert_eq!(drain_state(100, 0, 0, 500, 1_000), None);
         assert_eq!(drain_state(500, 0, 0, 500, 1_000), Some(true));
@@ -1616,7 +1523,6 @@ mod tests {
         );
         assert_eq!(classify(&member, Some(b"t-2")), Class::Misrouted);
         assert_eq!(classify(&member, None), Class::Misrouted);
-        assert_eq!(classify(&Membership::Legacy, None), Class::Home);
         assert_eq!(classify(&Membership::Churn, Some(b"t-0")), Class::Ignored);
         assert_eq!(classify(&Membership::Churn, Some(b"t-1")), Class::Misrouted);
     }
@@ -1624,7 +1530,7 @@ mod tests {
     #[test]
     fn binary_frames_round_trip() {
         let publisher = Publisher {
-            topic: Some("t-7".to_string()),
+            topic: "t-7".to_string(),
             binary: true,
             period_micros: 1,
             padding: "xx".to_string(),
@@ -1636,9 +1542,9 @@ mod tests {
         delivered.extend_from_slice(&sent[1..4]);
         delivered.extend_from_slice(&[0u8; 16]);
         delivered.extend_from_slice(&sent[4..]);
-        let (topic, stamp) = parse_binary(Protocol::Topics, &delivered).unwrap();
-        assert_eq!(topic, Some(&b"t-7"[..]));
+        let (topic, stamp) = parse_binary(&delivered).unwrap();
+        assert_eq!(topic, &b"t-7"[..]);
         assert_eq!((stamp.t, stamp.s), (11, 22));
-        assert!(parse_binary(Protocol::Topics, &[5, b'k']).is_none());
+        assert!(parse_binary(&[5, b'k']).is_none());
     }
 }

@@ -1,27 +1,17 @@
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use axum::extract::ws::Message;
-use tokio::sync::broadcast;
-use uuid::Uuid;
-
-pub const BROADCAST_CAPACITY: usize = 256;
-
-#[derive(Clone, Debug)]
-pub struct BroadcastMessage {
-    pub source_id: Uuid,
-    pub payload: Message,
-}
+use crate::registry::TopicRegistry;
 
 pub struct AppState {
-    pub tx: broadcast::Sender<BroadcastMessage>,
+    pub registry: Arc<TopicRegistry>,
     pub connections: AtomicUsize,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
-            tx,
+            registry: Arc::new(TopicRegistry::new()),
             connections: AtomicUsize::new(0),
         }
     }

@@ -44,57 +44,106 @@ assigned to it:
 {"type": "welcome", "id": "9f3c1a2e-..."}
 ```
 
-From then on, everything the client sends is relayed to every other connection.
-Senders do not receive an echo of their own messages.
+Nothing is delivered until the client subscribes. A message published to a
+topic reaches every other connection subscribed to it, and senders never receive
+an echo of their own messages.
 
-### Text frames
+A topic is an opaque key of 1 to 255 bytes of UTF-8, compared byte for byte.
+The gateway gives no meaning to its characters.
 
-The payload must be valid JSON — any JSON: object, array, number, string or
-`null`. It is validated and forwarded untouched, without being deserialized.
-
-A client sends:
-
-```json
-{"hp": 42, "pos": [1, 2]}
-```
-
-Everyone else receives:
+### Control frames from the client
 
 ```json
-{"type": "message", "from": "9f3c1a2e-...", "data": {"hp": 42, "pos": [1, 2]}}
+{"type": "subscribe", "topic": "t"}
+{"type": "unsubscribe", "topic": "t"}
+{"type": "publish", "topic": "t", "data": {"hp": 42, "pos": [1, 2]}}
 ```
 
-The envelope exists so receivers know the origin and so the gateway can signal
-errors and message loss on the same stream without colliding with the payload.
+`subscribe` and `unsubscribe` are idempotent and always answered. A connection
+holds at most 64 topics. `data` may be any JSON value, including `null`. It is
+validated and forwarded untouched, without being deserialized. The gateway parses
+its own control frame, never `data`. Unknown extra fields are ignored.
+
+The gateway answers:
+
+```json
+{"type": "subscribed", "topic": "t"}
+{"type": "unsubscribed", "topic": "t"}
+```
+
+`subscribed` is sent after the connection is registered, so any publish made
+after another connection received it reaches that connection. A frame for the
+topic can arrive before `subscribed` if a publish raced the subscription.
+`unsubscribed` is sent after the connection is removed, but frames already being
+delivered when it happened can still arrive, so filter on `topic` if that matters.
+
+Subscribers receive:
+
+```json
+{"type": "message", "topic": "t", "from": "9f3c1a2e-...", "data": {"hp": 42, "pos": [1, 2]}}
+```
+
+The envelope exists so receivers know the topic and the origin, and so the
+gateway can signal errors and message loss on the same stream without colliding
+with the payload. A sender's frames reach a receiver in send order.
 
 ### Binary frames
 
-Relayed byte for byte, with no envelope. There is no ambiguity with the JSON
-above because they are distinct WebSocket frame types. The trade-off is that
-receivers do not learn the origin — use text frames if you need it, or carry it
-in your own framing.
+The payload is opaque bytes. A client sends `[len: u8][topic: len bytes][payload]`
+and subscribers receive `[len: u8][topic][sender uuid: 16 bytes][payload]`, where
+the uuid is in RFC 4122 byte order. The payload may be empty.
 
-### Control frames
+### Other frames
 
 ```json
 {"type": "warning", "dropped": 12}
-{"type": "error", "message": "text frames must contain valid JSON; use binary frames otherwise"}
+{"type": "error", "topic": "t", "message": "text frames must be subscribe, unsubscribe or publish control frames"}
 ```
 
 `warning` means the client did not drain its socket fast enough and the gateway
 discarded `dropped` messages destined for it. Delivery is best-effort by design;
 see [`docs/decisions.md`](docs/decisions.md).
 
+All of a connection's topics share one inbox. Under lag a busy topic can push out
+the frames of a quiet one, and `warning` reports only a total for the connection,
+not which topics lost frames. A topic that must be isolated goes on its own
+connection.
+
+`error` always carries `topic`: the topic of the frame that failed, after JSON
+unescaping, or `null` when no topic could be read (the frame is not JSON, has no
+string `topic`, or a binary header is truncated or not UTF-8). The connection
+stays open after an error.
+
+### Topic lifecycle
+
+A topic has no existence of its own. It is the set of connections subscribed to a
+key, and it exists exactly while that set is not empty.
+
+- The first `subscribe` creates it. Removing the last subscriber, by
+  `unsubscribe` or disconnect, deletes it.
+- A `publish` never creates a topic. Publishing to a key nobody is subscribed to
+  is discarded, and the publisher is not told.
+- Nothing is retained: a subscriber receives only what is published after it
+  subscribed, and nothing survives an empty period.
+- Topics have no owner and no namespace. Two applications that pick the same key
+  share one topic, so prefix keys per application, for example `app-a/...`. The
+  gateway does not enforce it.
+- There is no access control. Any connection can subscribe to or publish on any
+  key it can guess, so keys are not secrets.
+
 ### Limits
 
-Frames larger than 64 KiB are rejected at the WebSocket layer: the sender's connection is dropped without a close frame, and nothing is relayed.
+Frames larger than 64 KiB, header included, are rejected at the WebSocket layer:
+the sender's connection is dropped without a close frame, and nothing is relayed.
+A connection holds at most 64 subscriptions.
 
 ## Layout
 
 | Path                  | Responsibility                      |
 | --------------------- | ----------------------------------- |
 | `src/protocol.rs`     | Frames the gateway emits            |
-| `src/state.rs`        | Shared state and the broadcast bus  |
+| `src/registry.rs`     | Topic registry and subscriptions    |
+| `src/state.rs`        | Shared state                        |
 | `src/ws.rs`           | Connection lifecycle and tasks      |
 | `src/lib.rs`          | Router and `run`                    |
 | `src/main.rs`         | Config, logging and shutdown        |
@@ -104,10 +153,9 @@ Frames larger than 64 KiB are rejected at the WebSocket layer: the sender's conn
 | `scripts/bench.sh`    | Benchmark sweep                     |
 | `scripts/calibrate.sh`| Harness self-check                  |
 
-Each connection runs three tasks: one reading from the socket, one bridging the
-bus, one writing to the socket. The first to finish tears down the others. The
-sender serializes the envelope once and each subscriber only clones a refcounted
-buffer.
+Each connection runs two tasks: one reading from the socket and one writing to
+it. The first to finish tears down the other. The sender serializes the envelope
+once and each subscriber only clones a refcounted buffer.
 
 ## Documentation
 
@@ -132,18 +180,13 @@ scripts/bench.sh             # baseline sweep, writes bench-results/<timestamp>.
 scripts/bench.sh --goal      # 1M goal + stretch scenarios and a pass/miss verdict
 scripts/bench.sh --all       # baseline + goal + stretch, with verdict
 scripts/calibrate.sh         # harness self-check against a known answer
-scripts/bench.sh --all --protocol topics   # the same sweep against topic routing
 ```
 
 `bench.sh` refuses to produce numbers if the calibration fails.
-`--protocol legacy` (the default) drives today's gateway; `--protocol topics`
-drives topic routing, and scenarios that need topics are skipped under
-`legacy`. See `docs/architecture.md` for the performance goal, current
+See `docs/architecture.md` for the performance goal, current
 baselines, and how to read them.
 
 ## Not implemented yet
 
-Topic or room routing — today there is a single bus and every connection
-receives everything, which makes fanout O(N²). There is also no authentication,
-no per-connection rate limiting, and no backplane for running more than one
-instance.
+There is no authentication, no per-connection rate limiting, no access control
+on topics, and no backplane for running more than one instance.

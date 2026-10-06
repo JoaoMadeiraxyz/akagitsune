@@ -1,6 +1,6 @@
 ---
 name: perf-check
-description: Measure realtime-gateway throughput, latency and backpressure with the loadgen harness before making any performance or scalability claim. Use when changing the hot path (src/ws.rs reader or bridge, src/state.rs BroadcastMessage, the broadcast bus), when tuning capacities, when investigating slowness or lag warnings, or when asked how fast or how scalable the gateway is.
+description: Measure realtime-gateway throughput, latency and backpressure with the loadgen harness before making any performance or scalability claim. Use when changing the hot path (src/ws.rs reader or writer, src/registry.rs fanout, the per-connection inbox), when tuning capacities, when investigating slowness or lag warnings, or when asked how fast or how scalable the gateway is.
 ---
 
 # perf-check
@@ -16,8 +16,9 @@ a violation is a regression regardless of what the benchmark says:
 
 - Payload never deserialized (`&RawValue` only).
 - Envelope serialized once by the publisher, not per receiver.
-- `BroadcastMessage` clone stays a refcount bump.
-- No locks, allocations or formatting added to the fanout loop.
+- A `Message` clone in the fanout stays a refcount bump.
+- No lock in gateway code, and no allocation or formatting, added to the fanout
+  loop. Locks inside tokio channel internals are allowed.
 
 A microbenchmark will often fail to show these — at low connection counts the
 per-receiver cost is invisible. They matter at scale, which is exactly where you
@@ -47,14 +48,7 @@ scripts/bench.sh --quick      # one 200-connection fanout run
 scripts/bench.sh --goal       # 1M goal + stretch scenarios and pass/miss verdict
 scripts/bench.sh --all        # baseline + goal + stretch, with verdict
 scripts/calibrate.sh          # harness self-check only
-scripts/bench.sh --all --protocol topics   # same sweep against topic routing
 ```
-
-`--protocol legacy` (the default) drives today's gateway, where every frame goes
-to every other connection. `--protocol topics` drives topic routing. Scenarios
-that need topics (`topics-1k`, `topics-5k`, `overlap-*`, `churn-500`,
-`goal-1m-topics`) are skipped under `legacy` with a printed line. `loadgen` and
-`refserver` take the same flag.
 
 `bench.sh` starts a fresh gateway per scenario, samples its RSS and CPU
 alongside the run, writes `bench-results/<timestamp>.csv` (or `*-goal.csv` /
@@ -91,18 +85,16 @@ cargo run --release --example loadgen -- \
   known load, not capacity. Below 100% the run is past the cliff. The extra quiet
   topic (`--extra-topic-rate`) is reported apart as `extra_delivery_pct` and is
   never part of throughput.
-- **`warnings` is the backpressure signal.** Non-zero means consumers fell more
-  than `BROADCAST_CAPACITY` behind and the gateway dropped messages for them.
+- **`warnings` is the backpressure signal.** Non-zero means a connection fell more
+  than `INBOX_CAPACITY` frames behind in its own inbox and the gateway dropped
+  frames for it.
   Throughput that looks good with warnings climbing is not good throughput.
 - **Correctness meters come before speed.** `misrouted` (frames on a topic the
   receiver did not join), `subscribe_failed`, and after a full drain
   `unaccounted` (frames lost without a `warning`) and `churn_failed` must all be
   0. Any of them non-zero makes the verdict `incorrect`, whatever the speed.
-  `null` means "not measured" — the topic meters under `legacy`, or `unaccounted`
-  when the run did not drain — and is never a pass. Under `legacy`,
-  `unaccounted` covers only sockets that do not publish (`unaccounted_scope`
-  says how many), because the global bus's `Lagged(n)` also counts a
-  publisher's own frames.
+  `null` means "not measured", for example `unaccounted` when the run did not
+  drain, and is never a pass.
 - **`drained`.** After the window `loadgen` reads until no frame has arrived for
   500 ms, up to `--drain-max-ms`. An undrained run is marked `(undrained)` and
   its `unaccounted` is not judged.
@@ -134,7 +126,7 @@ cargo run --release --example loadgen -- \
 change to either invalidates every baseline taken with the old one. Re-run
 `scripts/calibrate.sh`, and if a case fails, fix the harness rather than widen
 the tolerance — the predicted values are arithmetic, not preferences. It runs
-cases 1–15 under both protocols where they apply, including one known-answer
+cases 1–15, including one known-answer
 case per correctness meter (misrouting, silent and reported loss, drain, churn,
 extra topic, withheld subscribe and unsubscribe acknowledgements). Histogram, schedule, expected-delivery and drain arithmetic are
 unit tested: `cargo test --examples`.
