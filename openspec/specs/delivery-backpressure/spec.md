@@ -6,34 +6,38 @@ Defines what happens when a connection cannot keep up with the frames relayed to
 ## Requirements
 
 ### Requirement: Lagging connections are warned of dropped frames
-When a connection falls more than 256 frames behind the relay bus, the gateway SHALL discard the frames it missed, SHALL send it `{"type":"warning","dropped":<n>}` with `n` greater than zero equal to the number of frames discarded, and SHALL continue delivering from the current position of the bus.
+Each connection SHALL hold at most 256 frames pending delivery. When a frame is to be delivered to a connection that already holds 256, the gateway SHALL discard that connection's oldest pending frame, for that connection only. When the connection is next served after one or more discards, the gateway SHALL send it `{"type":"warning","dropped":<n>}` before any further frame, where `n` is greater than zero and equal to the number of frames discarded for it since the previous frame it was sent, and SHALL then continue with the oldest frame still pending. Frames a connection published itself SHALL NOT be counted in `n`.
 
-Fonte: `src/ws.rs:82` — `handle_socket`; `src/state.rs:7` — `BROADCAST_CAPACITY`; `src/protocol.rs:10` — `ServerMessage`.
-Teste: `tests/gateway.rs:175` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:194` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:235` — `dropped_count_matches_the_frames_skipped`.
+Fonte: `src/registry.rs:12` — `Subscriber`; `src/ws.rs:27` — `INBOX_CAPACITY`; `src/ws.rs:116` — `write_loop`; `src/protocol.rs:14` — `ServerMessage`.
+Teste: `tests/gateway.rs:313` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:333` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:371` — `dropped_count_matches_the_frames_skipped`.
 
 #### Scenario: Slow consumer receives a warning
-- **WHEN** connection A sends 128000 text frames while connection B reads slower than they arrive
+- **WHEN** connection B is subscribed to `k` and reads slower than frames arrive
+- **AND** connection A publishes 128000 frames to `k`
 - **THEN** B eventually receives a frame `{"type":"warning","dropped":<n>}` with `n > 0`
 
 #### Scenario: Delivery resumes after a warning
-- **WHEN** connection A sends 128000 text frames `{"seq":<i>}` followed by `{"marker":"end"}` while connection B lags
+- **WHEN** connection B is subscribed to `k` and lags
+- **AND** connection A publishes 128000 frames to `k` with `data` `{"seq":<i>}`, followed by `{"marker":"end"}`
 - **THEN** B receives at least one `warning`
 - **AND** every `seq` B receives is strictly greater than the previous one
 - **AND** B receives the `{"marker":"end"}` frame
 
 #### Scenario: Dropped count is exact
-- **WHEN** connection A sends 128000 text frames `{"seq":<i>}` followed by `{"marker":"end"}` while connection B lags
+- **WHEN** connection B is subscribed to `k` and lags
+- **AND** connection A publishes 128000 frames to `k` with `data` `{"seq":<i>}`, followed by `{"marker":"end"}`
 - **THEN** B receives at least one `warning`
-- **AND** each `seq` B receives equals the previous `seq` plus one (or 0 for the first) plus the sum of `dropped` in the warnings received since the previous `seq`
+- **AND** each `seq` B receives equals the previous `seq` plus one (or 0 for the first), plus the sum of `dropped` in the warnings received since the previous `seq`
 - **AND** the number of frames B receives, marker included, plus the sum of every `dropped` equals 128001
 
 ### Requirement: Publishing never waits for a slow receiver
-The gateway SHALL accept and relay a sender's frames regardless of how far behind any receiving connection is; a slow receiver SHALL only cause frames to be dropped for itself.
+The gateway SHALL accept and deliver a publisher's frames regardless of how far behind any subscriber of the topic is. A slow subscriber SHALL only cause frames to be dropped for itself.
 
-Fonte: `src/ws.rs:114` — `handle_socket`; `src/ws.rs:89` — `handle_socket`.
-Teste: `tests/gateway.rs:285` — `slow_receiver_does_not_hold_back_others`.
+Fonte: `src/registry.rs:63` — `fanout`; `src/registry.rs:18` — `TopicRegistry`.
+Teste: `tests/gateway.rs:418` — `slow_receiver_does_not_hold_back_others`.
 
 #### Scenario: Other connections keep receiving
-- **WHEN** connection B stops reading while connection A sends 128000 text frames `{"seq":<i>}` in chunks of 100, each chunk sent after connection C received the previous one, followed by `{"marker":"end"}`
+- **WHEN** connections B and C are subscribed to `k` and B stops reading
+- **AND** connection A publishes 128000 frames to `k` with `data` `{"seq":<i>}` in chunks of 100, each chunk sent after C received the previous one, followed by `{"marker":"end"}`
 - **THEN** C receives every `seq` from 0 to 127999 in order, followed by `{"marker":"end"}`
 - **AND** B, when it reads again, receives a `warning`
