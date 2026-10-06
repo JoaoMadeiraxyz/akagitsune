@@ -5,8 +5,8 @@
 ### Requirement: Subscribing to a topic is acknowledged
 A connection SHALL subscribe to a topic by sending the text frame `{"type":"subscribe","topic":"<key>"}`. The gateway SHALL answer with `{"type":"subscribed","topic":"<key>"}` once the subscription is in effect. Subscribing to a topic the connection is already subscribed to SHALL be answered the same way and SHALL NOT create a second subscription.
 
-Fonte: planned — `src/registry.rs` — `TopicRegistry`; `src/ws.rs` — `handle_socket`; `src/protocol.rs` — `ClientFrame`.
-Teste: planned — `tests/gateway.rs` — `subscribe_is_acknowledged`; `tests/gateway.rs` — `duplicate_subscribe_delivers_once`.
+Fonte: `src/registry.rs:18` — `TopicRegistry`; `src/ws.rs:185` — `handle_text`; `src/protocol.rs:39` — `ClientFrame`.
+Teste: `tests/gateway.rs:516` — `subscribe_is_acknowledged`; `tests/gateway.rs:523` — `duplicate_subscribe_delivers_once`.
 
 #### Scenario: Subscribe is acknowledged
 - **WHEN** a connection sends `{"type":"subscribe","topic":"k"}`
@@ -20,8 +20,8 @@ Teste: planned — `tests/gateway.rs` — `subscribe_is_acknowledged`; `tests/ga
 ### Requirement: A publish reaches only the other subscribers of its topic
 A connection SHALL publish by sending `{"type":"publish","topic":"<key>","data":<payload>}`. The gateway SHALL deliver it to every other connection subscribed to `<key>` and to no connection that is not. Publishing SHALL NOT require the publisher to be subscribed. A publish to a topic with no subscribers SHALL be discarded without any frame to the publisher.
 
-Fonte: planned — `src/ws.rs` — `handle_socket`; `src/registry.rs` — `TopicRegistry`.
-Teste: planned — `tests/gateway.rs` — `publish_reaches_only_subscribers_of_its_topic`; `tests/gateway.rs` — `publisher_need_not_be_subscribed`; `tests/gateway.rs` — `publish_to_empty_topic_is_silent`.
+Fonte: `src/ws.rs:185` — `handle_text`; `src/registry.rs:18` — `TopicRegistry`.
+Teste: `tests/gateway.rs:537` — `publish_reaches_only_subscribers_of_its_topic`; `tests/gateway.rs:557` — `publisher_need_not_be_subscribed`; `tests/gateway.rs:569` — `publish_to_empty_topic_is_silent`.
 
 #### Scenario: Only subscribers of the topic receive
 - **WHEN** connection B is subscribed to `k`, connection C is subscribed to `other`, and connection D has no subscriptions
@@ -42,8 +42,8 @@ Teste: planned — `tests/gateway.rs` — `publish_reaches_only_subscribers_of_i
 ### Requirement: A subscription is visible to every publish made after its acknowledgement
 Once a connection has received `subscribed` for a topic, every publish to that topic sent by another connection after that point SHALL be delivered to it, subject to backpressure. A frame for the topic MAY arrive before `subscribed` when the publish raced the subscription.
 
-Fonte: planned — `src/registry.rs` — `TopicRegistry`; `src/ws.rs` — `handle_socket`.
-Teste: planned — `tests/gateway.rs` — `publish_after_subscribed_is_delivered`.
+Fonte: `src/registry.rs:18` — `TopicRegistry`; `src/ws.rs:185` — `handle_text`.
+Teste: `tests/gateway.rs:580` — `publish_after_subscribed_is_delivered`.
 
 #### Scenario: Publish after acknowledgement is delivered
 - **WHEN** connection B sends `subscribe` for `k` and receives `subscribed`
@@ -53,8 +53,8 @@ Teste: planned — `tests/gateway.rs` — `publish_after_subscribed_is_delivered
 ### Requirement: Unsubscribing stops delivery
 A connection SHALL unsubscribe by sending `{"type":"unsubscribe","topic":"<key>"}`. The gateway SHALL answer with `{"type":"unsubscribed","topic":"<key>"}`, and SHALL NOT deliver to it any publish to `<key>` sent after that acknowledgement was received. Frames for `<key>` already being delivered when the unsubscribe was processed MAY still arrive after the acknowledgement. Unsubscribing from a topic the connection is not subscribed to SHALL be answered the same way.
 
-Fonte: planned — `src/registry.rs` — `TopicRegistry`; `src/ws.rs` — `handle_socket`.
-Teste: planned — `tests/gateway.rs` — `unsubscribe_stops_delivery`; `tests/gateway.rs` — `unsubscribe_without_subscription_is_acknowledged`.
+Fonte: `src/registry.rs:18` — `TopicRegistry`; `src/ws.rs:185` — `handle_text`.
+Teste: `tests/gateway.rs:597` — `unsubscribe_stops_delivery`; `tests/gateway.rs:616` — `unsubscribe_without_subscription_is_acknowledged`.
 
 #### Scenario: No delivery after unsubscribe
 - **WHEN** connection B subscribes to `k`, then sends `unsubscribe` for `k` and receives `{"type":"unsubscribed","topic":"k"}`
@@ -68,8 +68,8 @@ Teste: planned — `tests/gateway.rs` — `unsubscribe_stops_delivery`; `tests/g
 ### Requirement: A disconnected connection is removed from every topic
 When a connection ends for any reason, the gateway SHALL remove it from every topic it was subscribed to, and later publishes SHALL be delivered to the remaining subscribers as if it had never subscribed.
 
-Fonte: planned — `src/registry.rs` — `Subscriptions`.
-Teste: planned — `tests/gateway.rs` — `disconnect_leaves_other_subscribers_working`.
+Fonte: `src/registry.rs:87` — `Subscriptions`.
+Teste: `tests/gateway.rs:623` — `disconnect_leaves_other_subscribers_working`.
 
 #### Scenario: Remaining subscribers keep receiving
 - **WHEN** connections B and C are subscribed to `k` and B closes its socket
@@ -79,8 +79,8 @@ Teste: planned — `tests/gateway.rs` — `disconnect_leaves_other_subscribers_w
 ### Requirement: A topic exists only while it has subscribers
 A topic SHALL come into existence when the first connection subscribes to its key, and SHALL cease to exist when its last subscriber leaves by `unsubscribe` or disconnection. A `publish` SHALL NOT create a topic. The gateway SHALL NOT retain any frame, member or setting for a topic across a period in which it had no subscribers, and a frame published during such a period SHALL NOT be delivered to any connection that subscribes later.
 
-Fonte: planned — `src/registry.rs` — `TopicRegistry`; `src/registry.rs` — `Subscriptions`.
-Teste: planned — `tests/gateway.rs` — `publish_before_any_subscription_is_not_retained`; `tests/gateway.rs` — `emptied_topic_starts_over`.
+Fonte: `src/registry.rs:18` — `TopicRegistry`; `src/registry.rs:87` — `Subscriptions`.
+Teste: `tests/gateway.rs:643` — `publish_before_any_subscription_is_not_retained`; `tests/gateway.rs:660` — `emptied_topic_starts_over`.
 
 #### Scenario: Publish before any subscription is not retained
 - **WHEN** connection A publishes `{"seq":1}` to `k` while no connection is subscribed to `k`
@@ -103,8 +103,8 @@ Teste: planned — `tests/gateway.rs` — `publish_before_any_subscription_is_no
 ### Requirement: Topics have no owner and no access control
 Any connection SHALL be able to subscribe and publish to any valid topic key, regardless of which connection subscribed to it first. No connection SHALL be able to close a topic or remove other connections from it. Connections that choose the same key SHALL share the same topic.
 
-Fonte: planned — `src/ws.rs` — `handle_socket`; `src/registry.rs` — `TopicRegistry`.
-Teste: planned — `tests/gateway.rs` — `any_connection_can_join_any_topic`.
+Fonte: `src/ws.rs:185` — `handle_text`; `src/registry.rs:18` — `TopicRegistry`.
+Teste: `tests/gateway.rs:690` — `any_connection_can_join_any_topic`.
 
 #### Scenario: Unrelated connections share a key
 - **WHEN** connection B subscribes to `k`
@@ -121,8 +121,8 @@ Teste: planned — `tests/gateway.rs` — `any_connection_can_join_any_topic`.
 ### Requirement: Topics are 1 to 255 bytes of UTF-8
 The gateway SHALL accept as a topic any string of 1 to 255 bytes of UTF-8, measured after JSON unescaping, and SHALL compare topics byte for byte. A `subscribe`, `unsubscribe` or `publish` whose topic is empty or longer than 255 bytes SHALL be answered with `{"type":"error","topic":"<the topic as sent>","message":"<INVALID_TOPIC>"}`, SHALL have no other effect, and SHALL leave the connection open.
 
-Fonte: planned — `src/protocol.rs` — `MAX_TOPIC_LEN`; `src/ws.rs` — `INVALID_TOPIC`.
-Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.rs` — `topics_compare_byte_for_byte`.
+Fonte: `src/protocol.rs:8` — `MAX_TOPIC_LEN`; `src/ws.rs:31` — `INVALID_TOPIC`.
+Teste: `tests/gateway.rs:709` — `topic_length_limits`; `tests/gateway.rs:739` — `topics_compare_byte_for_byte`.
 
 #### Scenario: Topic at 255 bytes is accepted
 - **WHEN** a connection subscribes to a topic of exactly 255 bytes
@@ -141,8 +141,8 @@ Teste: planned — `tests/gateway.rs` — `topic_length_limits`; `tests/gateway.
 ### Requirement: A connection holds at most 64 subscriptions
 A connection SHALL be able to hold up to 64 distinct topic subscriptions. A `subscribe` to a new topic beyond that SHALL be answered with `{"type":"error","topic":"<that topic>","message":"<SUBSCRIPTION_LIMIT>"}` and SHALL NOT change the connection's subscriptions.
 
-Fonte: planned — `src/registry.rs` — `MAX_SUBSCRIPTIONS_PER_CONNECTION`; `src/ws.rs` — `SUBSCRIPTION_LIMIT`.
-Teste: planned — `tests/gateway.rs` — `subscription_limit_is_enforced`.
+Fonte: `src/registry.rs:9` — `MAX_SUBSCRIPTIONS_PER_CONNECTION`; `src/ws.rs:34` — `SUBSCRIPTION_LIMIT`.
+Teste: `tests/gateway.rs:767` — `subscription_limit_is_enforced`.
 
 #### Scenario: Sixty-fifth topic is rejected
 - **WHEN** a connection subscribes to 64 distinct topics and receives 64 acknowledgements
@@ -154,8 +154,8 @@ Teste: planned — `tests/gateway.rs` — `subscription_limit_is_enforced`.
 ### Requirement: Every error frame names the topic it concerns
 Every `error` frame SHALL have the shape `{"type":"error","topic":<topic or null>,"message":"<text>"}`, with the `topic` field always present. When the frame that caused the error was parsed as a control frame (whatever its `type`), or was a binary frame whose length byte and topic bytes could be read, `topic` SHALL be the topic exactly as the client sent it, after JSON unescaping, even when that topic is itself invalid. When no topic could be read, because the frame was not JSON, had no string `topic` field, or was a binary frame too short for its declared topic or with a topic that is not UTF-8, `topic` SHALL be `null`.
 
-Fonte: planned — `src/protocol.rs` — `ServerMessage`; `src/ws.rs` — `handle_socket`.
-Teste: planned — `tests/gateway.rs` — `errors_name_the_topic`; `tests/gateway.rs` — `errors_without_a_readable_topic_are_null`.
+Fonte: `src/protocol.rs:14` — `ServerMessage`; `src/ws.rs:185` — `handle_text`; `src/ws.rs:218` — `handle_binary`.
+Teste: `tests/gateway.rs:792` — `errors_name_the_topic`; `tests/gateway.rs:833` — `errors_without_a_readable_topic_are_null`.
 
 #### Scenario: Several subscribes, one rejected
 - **WHEN** a connection holding 63 subscriptions sends `subscribe` for `a` and then for `b` without waiting
