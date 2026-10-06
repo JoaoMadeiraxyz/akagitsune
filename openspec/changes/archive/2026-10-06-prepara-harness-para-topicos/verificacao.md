@@ -106,6 +106,26 @@ Every number of the baseline tables (`docs/architecture.md:192-200`, `:227-233`)
 
 Non-blocking: the `legacy` bus-lag branch of `refserver` has no case, observation 8 (ack latency under delay), `docs/decisions.md:207` omits the two new faults, task 8.6 has no isolated before/after, and the "2x" and "lightly loaded" wording.
 
-## 6. Verdict
+## 6. Verdict (superseded by section 7)
 
-Not ready to archive. The harness code meets every decision and case of `design.md`, every finding of the earlier verification is fixed in code (cases 14 and 15 close the main one), and all gates pass. The remaining blockers are in the documentation recorded by tasks 8.7 and 8.8: B1 to B4 above. Task 8.9 stays unchecked.
+Not ready to archive at `add2222`. B1 to B4 were open.
+
+## 7. Re-verification of B1-B4 (2026-10-06)
+
+- commit verified: `7e871ec` (main, after [akagitsune#30](https://github.com/JoaoMadeiraxyz/akagitsune/pull/30) and [akagitsune#31](https://github.com/JoaoMadeiraxyz/akagitsune/pull/31)).
+- session: independent verifier. Benchmarks were not run.
+
+| Finding | Evidence | Status |
+|---|---|---|
+| B1 | `docs/architecture.md:391-411` lists cases 1-15. Case 2 (`:397`) uses `service p50 minus (floor + held delay)` with floor 0.49-0.50 ms and server held 51.2 ms. The closing paragraph (`:416-421`) attributes about 1.2 ms of the 1.58 ms to the server timer overshoot | resolved |
+| B2 | CPU, peak RSS and RSS per connection columns at `docs/architecture.md:192-202` and `:228-238`. Every cell matches `bench-results/20261006-142007-all.csv` (16 rows compared). Per-connection statement at `:253-261` (142.0-151.3 KiB). The `cliff-300` gateway 547% against loadgen 386% is stated at `:262-265` | resolved |
+| B3 | `docs/measurements/2026-10-06-loadgen-comparison.md` exists with the raw runs and is linked at `docs/architecture.md:273` and `:297-298`. Ranges match: 68.8-69.8 s and 5.30-5.37 us against 22.0-22.5 s and 1.69-1.73 us, p99 6.26-6.67 against 6.16-7.02 ms, cliff 70.5-72.8% with 206, 481, 868 warnings against 99.51-100% with 0, 80, 5081. `docs/architecture.md:289-293` says the timer was not isolated and the cause is not established | resolved |
+| B4 | `tasks.md:95` requires recording the load average and says an idle machine is not required. `design.md:200` says the same. `docs/architecture.md:217-221` records load average 3.4-11 | resolved |
+
+Gates on `7e871ec`: `cargo fmt --check` pass, `cargo clippy --all-targets -- -D warnings` pass, `cargo test` pass (`tests/gateway.rs` 13, `examples/loadgen.rs` 14), `openspec validate --all --strict` 5 passed, 0 failed.
+
+Non-blocking items from section 5 are unchanged.
+
+## 8. Verdict
+
+Ready to archive. B1 to B4 are resolved and every gate passes.
