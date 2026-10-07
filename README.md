@@ -128,8 +128,9 @@ key, and it exists exactly while that set is not empty.
 - Topics have no owner and no namespace. Two applications that pick the same key
   share one topic, so prefix keys per application, for example `app-a/...`. The
   gateway does not enforce it.
-- There is no access control. Any connection can subscribe to or publish on any
-  key it can guess, so keys are not secrets.
+- There is no access control on topics, and none is planned. Any admitted
+  connection can subscribe to or publish on any key it can guess, so keys are
+  not secrets. Only let clients you trust reach the gateway.
 
 ### Limits
 

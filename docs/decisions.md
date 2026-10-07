@@ -247,3 +247,11 @@ rather than quietly presented as the gateway's ceiling.
 **Decision.** The rule is reworded: "Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`." Gateway code takes no lock and holds nothing across `.await`. Channel-internal locks are accepted because they are held for a few instructions, are released inside the call, and in this design are contended only by publishers writing to the same receiver at the same instant, instead of by every publisher as today. Replacing the inbox with a lock-free ring is not done preemptively. It is reopened only if a benchmark shows inbox contention, which the `ingest-50`, `goal-1m-ingest` and `goal-1m-mesh` rows measure.
 
 **Consequence.** The rule now describes what the code does. Reviews check gateway code for locks and for `.await` while holding one, not tokio's internals. A future dependency that takes locks inside its own calls falls under the same allowance only if those locks are short and never held across `.await`; anything else needs a new entry.
+
+## 18. Subscription authorization is not built
+
+**Context.** Topics have no access control, and `docs/architecture.md` named subscription authorization as the expected next step. The open question was how the gateway learns what a connection may subscribe to without learning domain vocabulary. The answer depends on who connects. The gateway is self-hosted, and only the operator's own services are meant to reach it (connect-time authentication is proposed in [akagitsune#37](https://github.com/JoaoMadeiraxyz/akagitsune/pull/37)), so an admitted client is already trusted.
+
+**Decision.** There is no per-topic permission. Admission control at connect time is the only access check. The milestone is removed from the plan and kept under consideration with one trigger: an untrusted client, such as a browser, connecting directly to the gateway.
+
+**Consequence.** Any admitted connection can read and publish on any topic key it can guess, so keys are not secrets, and one trusted service can read another's topics. A deployment that needs separation gives each group of services its own gateway instance. If the trigger happens, the work is a credential issued per connection, not a per-token list in the configuration, and it needs its own proposal and entry.
