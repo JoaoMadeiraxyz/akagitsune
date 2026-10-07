@@ -163,6 +163,8 @@ once and each subscriber only clones a refcounted buffer.
 - [`docs/architecture.md`](docs/architecture.md) — lifecycle, hot-path
   invariants, scalability limits
 - [`docs/decisions.md`](docs/decisions.md) — why the design is the way it is
+- [`docs/roadmap.md`](docs/roadmap.md) — what is done and what is planned next,
+  in order
 
 ## Development
 
