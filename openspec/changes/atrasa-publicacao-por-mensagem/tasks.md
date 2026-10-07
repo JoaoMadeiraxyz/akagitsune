@@ -4,7 +4,7 @@ Implementation starts only after connect-time authentication and subscription au
 
 ## 1. Protocol
 
-- [ ] 1.1 Add `delay_ms: Option<u64>` to `ClientFrame` in `src/protocol.rs` and `MAX_DELAY_MS = 60_000`. A negative or non-integer value must fail the parse, which makes the frame invalid
+- [ ] 1.1 Add `delay_ms: Option<u64>` to `ClientFrame` in `src/protocol.rs` and `MAX_DELAY_MS = 120_000`. A negative or non-integer value must fail the parse, which makes the frame invalid
 - [ ] 1.2 Add `INVALID_DELAY` to `src/ws.rs`, with no domain vocabulary
 - [ ] 1.3 Add a unit test in `src/protocol.rs` that `delay_ms` is read as a number, is absent when not given, and that `-1`, `"5"` and `1.5` are rejected
 

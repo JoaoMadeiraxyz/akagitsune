@@ -20,7 +20,7 @@ Persistence across connections was considered and rejected by the project owner:
 
 ## What Changes
 
-- A `publish` text frame accepts an optional `delay_ms`, a non-negative integer number of milliseconds, at most `MAX_DELAY_MS` (60 000).
+- A `publish` text frame accepts an optional `delay_ms`, a non-negative integer number of milliseconds, at most `MAX_DELAY_MS` (120 000, that is 120 s).
 - The reader processes a connection's frames in order. A publish with `delay_ms > 0` waits that long before it is fanned out, counting from the moment it becomes the next frame to process. A publish with no delay is fanned out immediately.
 - While waiting, the reader does not read ahead more than one data frame. That frame is held and processed right after the delayed publish. The socket is not read again until the wait ends, so TCP backpressure slows a client that keeps writing, and the gateway holds at most two frames per connection for this feature.
 - If the connection closes while a publish is waiting, whether by a `Close` frame, end of stream or a socket error seen during the wait, the publish is dropped and never delivered.

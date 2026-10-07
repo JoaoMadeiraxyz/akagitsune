@@ -44,13 +44,13 @@ Teste: `tests/gateway.rs` — `close_during_delay_drops_the_publish`, `tcp_drop_
 - **THEN** connection B, subscribed to the topic, receives nothing for it
 
 ### Requirement: The delay has a maximum
-The gateway SHALL reject a publish whose `delay_ms` is greater than 60 000 with `{"type":"error","topic":"<key>","message":"<INVALID_DELAY>"}`, SHALL NOT deliver it, SHALL NOT wait, and SHALL keep the connection open.
+The gateway SHALL reject a publish whose `delay_ms` is greater than 120 000 with `{"type":"error","topic":"<key>","message":"<INVALID_DELAY>"}`, SHALL NOT deliver it, SHALL NOT wait, and SHALL keep the connection open.
 
 Fonte: `src/protocol.rs:11` — `MAX_TOPIC_LEN` (the new `MAX_DELAY_MS` goes next to it); `src/ws.rs:34` — error messages.
 Teste: `tests/gateway.rs` — `delay_above_cap_is_rejected` (to be added).
 
 #### Scenario: Delay above the cap is rejected
-- **WHEN** connection A sends a publish with `"delay_ms":60001`
+- **WHEN** connection A sends a publish with `"delay_ms":120001`
 - **THEN** A receives a frame with `"type":"error"` and the publish's `"topic"`
 - **AND** connection B, subscribed to the topic, receives nothing
 - **AND** a following publish from A is delivered normally

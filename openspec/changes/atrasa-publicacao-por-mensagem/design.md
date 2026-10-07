@@ -62,7 +62,7 @@ Shutdown needs no rule of its own. It closes connections, and what they hold is 
 
 ### 7. Limits
 
-- `MAX_DELAY_MS = 60 000`. The longest a single publish can hold the reader. It bounds how long a connection can be stalled by one frame and how long a delivery can lag after its send.
+- `MAX_DELAY_MS = 120 000` (120 s), chosen by the project owner. Backpressure falls on the client: the gateway does not buffer the burst, the socket is not read during a wait, and the client's own writes block. The gateway still caps the delay of a single message, because a wait is not free for the gateway either. It keeps the connection's reader, its two tasks and its socket occupied for the whole wait, and it lets a delivery lag by up to the cap after its send. Without a cap, one frame could pin a connection indefinitely. The cap is per message: a burst of capped delays is still allowed, and its cost falls on the client's own connection.
 - No cap on the number of delayed publishes in a row. They are never queued, so each one holds the reader for its own delay only, and the cost of a long burst falls on the client's own connection.
 - No per-connection or global byte budget. Memory is bounded by the two-frame hold and by `MAX_MESSAGE_SIZE`.
 
