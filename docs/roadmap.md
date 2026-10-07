@@ -12,7 +12,7 @@ What is done, and what is planned next, in the order it is planned. Every item s
 
 | # | Milestone | Status | Notes |
 |---|---|---|---|
-| 2 | **Connect-time authentication** | Not started, no change opened | Admission control, in scope. `docs/decisions.md` entry 4 fixes where it goes: at connect time (headers, query string or a subprotocol), never as an in-band frame. |
+| 2 | **Connect-time authentication** | Proposed in [akagitsune#37](https://github.com/JoaoMadeiraxyz/akagitsune/pull/37) | Admission control, in scope. `docs/decisions.md` entry 4 fixes where it goes: at connect time (headers, query string or a subprotocol), never as an in-band frame. |
 | 3 | **Publish pacing** (`delay_ms`) | Proposed in [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35) | Starts only after 2 is done. Before it is kept, the proposal's verification tasks still apply: repeated alternating `scripts/bench.sh --quick` runs to show the lookahead is cheap, and a mutation check of the disconnect tests. Decision 17 in `docs/decisions.md` on the proposal branch. |
 | 4 | **Per-connection rate limiting** | Not started, no change opened | Admission control, in scope. Listed in `README.md` under *Not implemented yet*. |
 
