@@ -128,8 +128,9 @@ key, and it exists exactly while that set is not empty.
 - Topics have no owner and no namespace. Two applications that pick the same key
   share one topic, so prefix keys per application, for example `app-a/...`. The
   gateway does not enforce it.
-- There is no access control. Any connection can subscribe to or publish on any
-  key it can guess, so keys are not secrets.
+- There is no access control on topics, and none is planned. Any admitted
+  connection can subscribe to or publish on any key it can guess, so keys are
+  not secrets. Only let clients you trust reach the gateway.
 
 ### Limits
 
@@ -163,6 +164,8 @@ once and each subscriber only clones a refcounted buffer.
 - [`docs/architecture.md`](docs/architecture.md) — lifecycle, hot-path
   invariants, scalability limits
 - [`docs/decisions.md`](docs/decisions.md) — why the design is the way it is
+- [`docs/roadmap.md`](docs/roadmap.md) — what is done and what is planned next,
+  in order
 
 ## Development
 
