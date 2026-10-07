@@ -13,9 +13,8 @@ What is done, and what is planned next, in the order it is planned. Every item s
 | # | Milestone | Status | Notes |
 |---|---|---|---|
 | 2 | **Connect-time authentication** | Not started, no change opened | Admission control, in scope. `docs/decisions.md` entry 4 fixes where it goes: at connect time (headers, query string or a subprotocol), never as an in-band frame. |
-| 3 | **Subscription authorization** | Not started, no change opened | Named in `docs/architecture.md` as the expected next step: today any connection can read any topic it can guess, and `subscribe` is the single place where a check goes. Open question for its proposal: how the gateway learns what a connection may subscribe to without learning any domain vocabulary. |
-| 4 | **Publish pacing** (`delay_ms`) | Proposed in [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35) | Starts only after 2 and 3 are done. Before it is kept, the proposal's verification tasks still apply: repeated alternating `scripts/bench.sh --quick` runs to show the lookahead is cheap, and a mutation check of the disconnect tests. Decision 17 in `docs/decisions.md` on the proposal branch. |
-| 5 | **Per-connection rate limiting** | Not started, no change opened | Admission control, in scope. Listed in `README.md` under *Not implemented yet*. |
+| 3 | **Publish pacing** (`delay_ms`) | Proposed in [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35) | Starts only after 2 is done. Before it is kept, the proposal's verification tasks still apply: repeated alternating `scripts/bench.sh --quick` runs to show the lookahead is cheap, and a mutation check of the disconnect tests. Decision 17 in `docs/decisions.md` on the proposal branch. |
+| 4 | **Per-connection rate limiting** | Not started, no change opened | Admission control, in scope. Listed in `README.md` under *Not implemented yet*. |
 
 ## Under consideration
 
@@ -23,6 +22,7 @@ Not planned yet. Each one needs a decision before it can be planned.
 
 | Milestone | Notes |
 |---|---|
+| **Subscription authorization** | Removed from the plan, see decision 18 in `docs/decisions.md`. The gateway is self-hosted and only the operator's own services are meant to reach it, so an admitted client is already trusted. It comes back only if an untrusted client, such as a browser, connects directly, which needs a credential issued per connection. |
 | **Delivery acknowledgements** | Listed as a borderline case in `docs/scope.md`: payload-agnostic, but it forces per-message state and a retry path where today there is none. It needs an entry in `docs/decisions.md` before any proposal, and it has to be weighed against the rule that a connection holds nothing that outlives it. |
 
 ## Not scheduled

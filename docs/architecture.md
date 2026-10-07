@@ -129,9 +129,10 @@ A topic that must be protected goes on its own connection.
 
 ### What would have to change
 
-- **Subscription authorization** is the expected next step. Any connection can
-  read any topic it can guess today, and `subscribe` is the single place where a
-  check would go.
+- **Subscription authorization** is deliberately absent (`docs/decisions.md`,
+  entry 18). Any connection that is admitted can read any topic it can guess.
+  It would need a credential issued per connection, and `subscribe` is the
+  single place where a check would go.
 - **Horizontal scale** needs a backplane (Redis pub/sub, NATS, a gossip mesh) so
   instances relay to each other. That decision is open and is built on the
   registry: the first local subscriber of a topic would subscribe the instance
