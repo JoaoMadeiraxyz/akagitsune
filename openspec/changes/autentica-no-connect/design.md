@@ -41,7 +41,7 @@ request ──► auth off?  ──yes──► upgrade (as today)
 
 - Knowing who a token belongs to. Identity stays the connection UUID.
 - Expiry, rotation endpoints, revocation of live connections, JWT, an external verifier.
-- Authorization of subscribe and publish (roadmap milestone 3).
+- Authorization of subscribe and publish. It was removed from the roadmap by decision 18 in `docs/decisions.md`.
 
 ## Decisions
 
@@ -51,7 +51,7 @@ request ──► auth off?  ──yes──► upgrade (as today)
 
 Alternatives considered:
 
-- **Signed token (JWT).** The gateway would verify a signature and an expiry, which needs a key, a clock and a library. Worse, a JWT carries claims, and the first thing a reader asks is whether the gateway may read them. That is exactly the open question of milestone 3, and it should be answered there, not by accident here.
+- **Signed token (JWT).** The gateway would verify a signature and an expiry, which needs a key, a clock and a library. Worse, a JWT carries claims, and the first thing a reader asks is whether the gateway may read them. The gateway has no use for claims, since it admits or refuses and nothing more.
 - **External verifier.** A call to a URL at connect time puts I/O and a new failure mode (verifier down) on the admission path, and makes every connect as slow as that service.
 
 A static set has no claims, no I/O and no state beyond the configuration. It passes the noun test: the gateway knows a token, not who holds it.
@@ -127,15 +127,16 @@ These are written into `docs/decisions.md` by the implementation PR. The number 
 
 **Decision.** `GATEWAY_AUTH_TOKENS` is a comma-separated set of opaque tokens. When set, an upgrade is admitted only if `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: bearer, <token>` carries one of them, compared in constant time. Anything else is refused with `401` before the upgrade. When unset, authentication is off and the gateway logs a warning at startup. A token does not map to an identity: identity stays the connection UUID.
 
-**Consequence.** Admission is checked once, costs nothing after it, and adds no per-connection state. A token removed from the configuration does not close live connections. A browser can authenticate through the subprotocol, and no credential travels in a URL. Subscription authorization has no hook yet, and its proposal must decide how a connection gets permissions without the gateway learning domain vocabulary.
+**Consequence.** Admission is checked once, costs nothing after it, and adds no per-connection state. A token removed from the configuration does not close live connections. A browser can authenticate through the subprotocol, and no credential travels in a URL. There is no per-topic permission, by decision 18, so an admitted connection can use any topic.
 
 ## Risks / Trade-offs
 
 - **A bearer token over plain `ws://` is readable on the wire.** The gateway does not terminate TLS, so the operator puts it behind a proxy that does. The README says so. Not mitigated in code.
-- **A shared static token identifies a deployment, not a client.** Two clients with the same token are indistinguishable, and there is no per-client revocation. This is accepted: it matches the stated goal of admission control, and anything finer is the milestone 3 question.
+- **A shared static token identifies a deployment, not a client.** Two clients with the same token are indistinguishable, and there is no per-client revocation. This is accepted: it matches the stated goal of admission control, and anything finer is not planned (decision 18).
 - **Off by default can ship an open gateway by mistake.** Mitigated only by the startup warning (decision 6).
+- **A token sent to a browser is visible to whoever uses that page.** The subprotocol form lets a browser authenticate, but it does not make the token secret from that browser's user. It fits clients the operator controls, which is the stated deployment.
 - **Subprotocol tokens appear in the `Sec-WebSocket-Protocol` request header,** which some proxies log. They are not in the URL, and the operator controls proxy logging.
 
 ## Open Questions
 
-None blocking. Whether a token should later carry anything the gateway uses is deferred to the subscription authorization proposal.
+None blocking. If an untrusted client ever connects directly, it needs a credential issued per connection, which is a separate proposal (decision 18).

@@ -55,5 +55,5 @@ Vocabulary: the new nouns are `token` and `credential`. There is no `user`, `acc
   - token expiry, rotation endpoints and revocation of live connections;
   - JWT, OAuth or a call to an external verifier;
   - TLS termination. The gateway still expects a reverse proxy for `wss://`, and a bearer token over plain `ws://` is readable on the wire;
-  - authorization of subscribe and publish, which is roadmap milestone 3.
-- **Expected next step:** subscription authorization. This change deliberately gives it no hook: the token does not reach `handle_socket`. Its proposal must decide how a connection acquires permissions without the gateway learning domain vocabulary, and may need to extend what a token carries.
+  - authorization of subscribe and publish. It was removed from the roadmap (decision 18 in `docs/decisions.md`): the gateway is self-hosted and an admitted client is already trusted.
+- **Next step:** none planned. The token does not reach `handle_socket`, and a deployment that needs separation between groups of services runs one gateway instance per group.

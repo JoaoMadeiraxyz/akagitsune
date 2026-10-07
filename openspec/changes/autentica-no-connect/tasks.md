@@ -25,7 +25,7 @@
 
 - [ ] 4.1 Add decision entry `N` from `design.md` to `docs/decisions.md`, numbered after the last entry on `main` at that time
 - [ ] 4.2 `README.md`: document `GATEWAY_AUTH_TOKENS`, the two credential forms with a browser example for the subprotocol, the TLS caveat, and remove "no authentication" from *Not implemented yet*
-- [ ] 4.3 `docs/architecture.md`: say authentication happens at admission and what stays out of it. Update the *What would have to change* note on subscription authorization to say connect-time authentication exists and gives it no hook
+- [ ] 4.3 `docs/architecture.md`: say authentication happens at admission and what stays out of it. Keep the note on subscription authorization, which already points at decision 18, and say it is not planned
 - [ ] 4.4 `openspec/config.yaml`: the Boundaries paragraph and the config line stop saying there is no auth and list `GATEWAY_AUTH_TOKENS`
 - [ ] 4.5 `docs/roadmap.md`: mark milestone 2 as in progress with the PR link, and mark it done when merged
 
