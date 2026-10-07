@@ -31,7 +31,7 @@ When a change is borderline, **stop and ask the user**. Do not decide silently.
   intent instead.
 - **Serialize once.** The sender builds the envelope one time; subscribers only
   clone a refcounted buffer. Never serialize per receiver.
-- **Gateway code uses no locks. Short internal locks inside tokio channels are allowed, and are never held across `.await`.**
+- **Gateway code uses no locks. Short internal locks inside tokio's channels and timers are allowed, and are never held across `.await`.**
   Shared state is the `AtomicUsize` and the lock-free topic registry.
 - **Every protocol behavior gets an integration test** in `tests/gateway.rs`.
 - **`clippy -D warnings` must be clean**, including `--all-targets`.

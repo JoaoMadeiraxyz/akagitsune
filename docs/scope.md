@@ -69,6 +69,7 @@ commit.
 | **Server-initiated routing rules** (filters, subscriptions with predicates)                             | Fine while the predicate is over metadata the gateway owns. The moment a predicate reads `data`, it is out.                                                     |
 | **A second wire format** (protobuf, MessagePack)                                                        | Transport-level and legitimate, but doubles the protocol surface and the test matrix.                                                                           |
 | **Opaque connection metadata** — a client-supplied label attached at connect and echoed in the envelope | Payload-agnostic and genuinely useful. But it is one rename away from being a username, and it is the single most likely path back into domain modelling.       |
+| **Publish pacing** — a `delay_ms` on a text publish, served by the connection's own reader | Payload-agnostic, and it holds no queue: at most the one frame being processed plus one read ahead, dropped when the connection ends. Borderline because it adds a field to the control frame, makes the connection's other text frames wait behind a delayed publish, and relies on a tokio timer. Persisting waiting publishes stays out of scope. See decision 17. |
 
 The pattern: *payload-agnostic* is necessary, not sufficient. Also ask whether
 the feature keeps the gateway stateless, cheap and small.
