@@ -13,7 +13,7 @@ What is done, and what is planned next, in the order it is planned. Every item s
 
 | # | Milestone | Status | Notes |
 |---|---|---|---|
-| 3 | **Publish pacing** (`delay_ms`) | Proposed in [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35) | Starts only after 2 is done. Before it is kept, the proposal's verification tasks still apply: repeated alternating `scripts/bench.sh --quick` runs to show the lookahead is cheap, and a mutation check of the disconnect tests. Decision 17 in `docs/decisions.md` on the proposal branch. |
+| 3 | **Publish pacing** (`delay_ms`) | In progress. Proposed in [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35) | Starts only after 2 is done, which it now is. Before it is kept, the proposal's verification tasks still apply: repeated alternating `scripts/bench.sh --quick` runs to show the lookahead is cheap, and a mutation check of the disconnect tests. Decision 17 in `docs/decisions.md`. |
 | 4 | **Per-connection rate limiting** | Not started, no change opened | Admission control, in scope. Listed in `README.md` under *Not implemented yet*. |
 
 ## Under consideration
