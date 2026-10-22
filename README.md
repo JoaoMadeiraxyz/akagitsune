@@ -60,11 +60,14 @@ const socket = new WebSocket("ws://127.0.0.1:3000/ws", ["bearer", "token-a"]);
 ```
 
 A missing, malformed or wrong token gets `401` with `WWW-Authenticate: Bearer`
-and an empty body, before any WebSocket exists. A token in the query string is
-not accepted, so a client that can set neither form cannot authenticate. The
-token is checked once, at connect: removing it from the configuration does not
-close connections already open. A token identifies a deployment, not a client,
-and does not limit which topics a connection can use.
+and an empty body, before any WebSocket exists. Each refused request logs one
+`warn` line with the peer address and no credential. An operator who does not
+want those lines can raise the log level, for example
+`RUST_LOG=realtime_gateway=error`. A token in the query string is not accepted,
+so a client that can set neither form cannot authenticate. The token is checked
+once, at connect: removing it from the configuration does not close connections
+already open. A token identifies a deployment, not a client, and does not limit
+which topics a connection can use.
 
 The gateway does not terminate TLS. A bearer token over plain `ws://` is
 readable on the wire, so put the gateway behind a proxy that serves `wss://`.
