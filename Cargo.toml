@@ -13,6 +13,7 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 papaya = "0.2.5"
+subtle = "2.6.1"
 
 [dev-dependencies]
 tokio-tungstenite = "0.30"

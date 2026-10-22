@@ -8,17 +8,20 @@ context: |
   `tokio::sync::broadcast` inbox per connection. It never interprets the payload.
 
   Boundaries: no upstream or downstream service. Clients are arbitrary
-  WebSocket peers; there is no auth, no storage, no backplane. Config is only
-  `GATEWAY_ADDR` (default 127.0.0.1:3000) and `RUST_LOG`.
+  WebSocket peers; there is no storage and no backplane. Authentication is a
+  connect-time check against opaque tokens and is off when none are configured.
+  Config is only `GATEWAY_ADDR` (default 127.0.0.1:3000), `GATEWAY_AUTH_TOKENS`
+  and `RUST_LOG`.
 
   Runtime and build: Rust edition 2024, Cargo (no workspace, no
   rust-toolchain file; CI uses stable). Dependencies: axum 0.8 (ws), tokio,
-  serde/serde_json with `raw_value`, uuid, tracing. Dev: tokio-tungstenite.
+  serde/serde_json with `raw_value`, uuid, tracing, subtle. Dev: tokio-tungstenite.
 
   Code map:
     src/protocol.rs  ServerMessage, ClientFrame, binary topic header
     src/registry.rs  TopicRegistry, Subscriber, Subscriptions, fanout
-    src/state.rs     AppState: the registry and the connection counter
+    src/auth.rs      Tokens, parse_tokens, constant-time admits
+    src/state.rs     AppState: tokens and SessionState (registry, connection counter)
     src/ws.rs        handle_socket: reader and writer tasks, INBOX_CAPACITY
     src/lib.rs       app() router and run()
     src/main.rs      config, logging, ctrl-c shutdown

@@ -50,16 +50,17 @@ scripts/bench.sh --all
 
 ## Layout
 
-| Path                 | Responsibility                       |
-| -------------------- | ------------------------------------ |
-| `src/protocol.rs`    | Control frames and binary header     |
-| `src/registry.rs`    | Topic registry and subscriptions     |
-| `src/state.rs`       | Shared state                         |
-| `src/ws.rs`          | Connection lifecycle and tasks       |
-| `src/lib.rs`         | Router and `run`                     |
-| `src/main.rs`        | Config, logging, shutdown            |
-| `tests/gateway.rs`   | End-to-end integration tests         |
-| `examples/loadgen.rs`| Load generator for perf measurement  |
+| Path                  | Responsibility                              |
+| --------------------- | ------------------------------------------- |
+| `src/auth.rs`         | Token set and constant-time admission check |
+| `src/protocol.rs`     | Control frames and binary header            |
+| `src/registry.rs`     | Topic registry and subscriptions            |
+| `src/state.rs`        | Shared state                                |
+| `src/ws.rs`           | Connection lifecycle and tasks              |
+| `src/lib.rs`          | Router and `run`                            |
+| `src/main.rs`         | Config, logging, shutdown                   |
+| `tests/gateway.rs`    | End-to-end integration tests                |
+| `examples/loadgen.rs` | Load generator for perf measurement         |
 
 ## Documentation
 
