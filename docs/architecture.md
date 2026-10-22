@@ -79,7 +79,7 @@ even if tests still pass.
   `Message`, whose `Text` and `Binary` variants are backed by
   `Utf8Bytes`/`Bytes`. Fanout clones once per subscriber; that clone must stay
   O(1).
-- **Gateway code uses no locks.** Short internal locks inside tokio channels are
+- **Gateway code uses no locks.** Short internal locks inside tokio's channels and timers are
   allowed, and are never held across `.await`. The shared state is an
   `AtomicUsize` connection counter and the lock-free topic registry, which
   publishers read without locking.
