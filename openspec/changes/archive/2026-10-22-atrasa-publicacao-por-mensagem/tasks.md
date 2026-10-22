@@ -34,4 +34,4 @@ Implementation starts only after connect-time authentication and subscription au
 - [x] 5.2 `docs/architecture.md`: the reader's wait in "The two tasks", the new row in "Scalability limits", and the updated lock invariant
 - [x] 5.3 State in the client documentation, plainly: text publishes only; the connection's other text frames wait while a publish waits; protocol pings are answered; a client cannot cancel a waiting publish except by disconnecting; a waiting publish is lost if the connection drops, with no persistence and no replay; one frame read ahead means a `Close` sent behind another frame is seen late; an older gateway ignores `delay_ms` silently
 - [x] 5.4 Remove "Not implemented yet" entries this change covers, if any
-- [ ] 5.5 Archive the change and merge the deltas into `openspec/specs/` after verification
+- [x] 5.5 Archive the change and merge the deltas into `openspec/specs/` after verification

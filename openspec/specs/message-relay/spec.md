@@ -38,10 +38,10 @@ Teste: `tests/gateway.rs:199` — `any_json_shape_is_accepted`.
 - **THEN** B receives each one as the `data` of a `message` envelope
 
 ### Requirement: Invalid JSON text is rejected to the sender only
-A text frame that is not valid JSON, or that is not a `subscribe`, `unsubscribe` or `publish` frame with the required fields, SHALL NOT be delivered to anyone. The gateway SHALL send the sender `{"type":"error","topic":<topic or null>,"message":"<INVALID_FRAME>"}`, with `topic` as defined in `topic-routing`, and SHALL keep the connection open. Fields other than `type`, `topic` and `data` SHALL be ignored.
+A text frame that is not valid JSON, or that is not a `subscribe`, `unsubscribe` or `publish` frame with the required fields, SHALL NOT be delivered to anyone. The gateway SHALL send the sender `{"type":"error","topic":<topic or null>,"message":"<INVALID_FRAME>"}`, with `topic` as defined in `topic-routing`, and SHALL keep the connection open. Fields other than `type`, `topic`, `data` and, on `publish`, `delay_ms` (see `publish-pacing`) SHALL be ignored.
 
 Fonte: `src/ws.rs:30` — `INVALID_FRAME`; `src/protocol.rs:39` — `ClientFrame`.
-Teste: `tests/gateway.rs:453` — `invalid_json_is_rejected_without_broadcasting`; `tests/gateway.rs:470` — `unrecognized_frame_is_rejected`.
+Teste: `tests/gateway.rs:453` — `invalid_json_is_rejected_without_broadcasting`; `tests/gateway.rs:470` — `unrecognized_frame_is_rejected`; `tests/gateway.rs:807` — `unknown_fields_are_still_ignored`.
 
 #### Scenario: Invalid text produces an error and no broadcast
 - **WHEN** connection B is subscribed to `k`
@@ -62,6 +62,10 @@ Teste: `tests/gateway.rs:453` — `invalid_json_is_rejected_without_broadcasting
 #### Scenario: Connection keeps working after an error
 - **WHEN** connection A, after receiving an `error` frame, publishes a valid frame to `k`
 - **THEN** connection B, subscribed to `k`, receives it in a `message` envelope
+
+#### Scenario: Unknown fields are still ignored
+- **WHEN** connection A sends `{"type":"subscribe","topic":"k","extra":[1]}`
+- **THEN** A receives `{"type":"subscribed","topic":"k"}`
 
 ### Requirement: Senders do not receive their own frames
 The gateway SHALL NOT deliver a published text or binary frame back to the connection that published it, including when that connection is subscribed to the topic.
