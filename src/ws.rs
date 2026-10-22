@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::{
     extract::{
@@ -14,6 +16,7 @@ use futures_util::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
+use serde_json::value::RawValue;
 use tokio::sync::{
     broadcast::{self, error::RecvError, error::TryRecvError},
     mpsc,
@@ -21,7 +24,7 @@ use tokio::sync::{
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::protocol::{BinaryHeader, ClientFrame, ServerMessage, is_valid_topic};
+use crate::protocol::{BinaryHeader, ClientFrame, MAX_DELAY_MS, ServerMessage, is_valid_topic};
 use crate::registry::{Subscriber, Subscriptions};
 use crate::state::{AppState, SessionState};
 
@@ -31,6 +34,7 @@ const CONTROL_QUEUE_CAPACITY: usize = 16;
 const WRITE_BATCH_SIZE: usize = 32;
 const INVALID_FRAME: &str = "text frames must be subscribe, unsubscribe or publish control frames";
 const INVALID_TOPIC: &str = "topics must be 1 to 255 bytes of UTF-8";
+const INVALID_DELAY: &str = "delay_ms can be at most 120000 milliseconds";
 const INVALID_BINARY: &str =
     "binary frames must start with a topic length and that many topic bytes";
 const SUBSCRIPTION_LIMIT: &str = "a connection can hold at most 64 subscriptions";
@@ -217,16 +221,60 @@ async fn write_loop(
     }
 }
 
+enum Parsed<'a> {
+    Reply(Message),
+    Publish {
+        topic: Cow<'a, str>,
+        data: &'a RawValue,
+        delay_ms: u64,
+    },
+}
+
+enum Wait {
+    Elapsed,
+    Disconnected,
+}
+
 async fn read_loop(
     mut stream: SplitStream<WebSocket>,
     mut subscriptions: Subscriptions,
     control: mpsc::Sender<Message>,
 ) {
     let from = subscriptions.id();
-    while let Some(Ok(msg)) = stream.next().await {
-        let reply = match msg {
-            Message::Text(text) => handle_text(&text, &mut subscriptions, from),
-            Message::Binary(bytes) => handle_binary(&bytes, &subscriptions, from),
+    let mut ahead: Option<Message> = None;
+    loop {
+        let msg = match ahead.take() {
+            Some(msg) => msg,
+            None => match stream.next().await {
+                Some(Ok(msg)) => msg,
+                _ => break,
+            },
+        };
+        let reply = match &msg {
+            Message::Text(text) => match parse_text(text, &mut subscriptions) {
+                Parsed::Reply(reply) => Some(reply),
+                Parsed::Publish {
+                    topic,
+                    data,
+                    delay_ms,
+                } => {
+                    if delay_ms > 0 {
+                        let delay = Duration::from_millis(delay_ms);
+                        if let Wait::Disconnected = wait_out(&mut stream, &mut ahead, delay).await {
+                            break;
+                        }
+                    }
+                    subscriptions.fanout(&topic, || {
+                        to_text(&ServerMessage::Message {
+                            topic: &topic,
+                            from,
+                            data,
+                        })
+                    });
+                    None
+                }
+            },
+            Message::Binary(bytes) => handle_binary(bytes, &subscriptions, from),
             Message::Close(_) => break,
             _ => continue,
         };
@@ -238,35 +286,59 @@ async fn read_loop(
     }
 }
 
-fn handle_text(text: &str, subscriptions: &mut Subscriptions, from: Uuid) -> Option<Message> {
+async fn wait_out(
+    stream: &mut SplitStream<WebSocket>,
+    ahead: &mut Option<Message>,
+    delay: Duration,
+) -> Wait {
+    let timer = tokio::time::sleep(delay);
+    tokio::pin!(timer);
+    loop {
+        tokio::select! {
+            _ = &mut timer => return Wait::Elapsed,
+            next = stream.next(), if ahead.is_none() => match next {
+                Some(Ok(msg @ (Message::Text(_) | Message::Binary(_)))) => *ahead = Some(msg),
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return Wait::Disconnected,
+            },
+        }
+    }
+}
+
+fn parse_text<'a>(text: &'a str, subscriptions: &mut Subscriptions) -> Parsed<'a> {
     let Ok(frame) = serde_json::from_str::<ClientFrame>(text) else {
-        return Some(error_frame(None, INVALID_FRAME));
+        return Parsed::Reply(error_frame(None, INVALID_FRAME));
     };
     let topic = &*frame.topic;
     let kind = &*frame.kind;
     if !matches!(kind, "subscribe" | "unsubscribe" | "publish") {
-        return Some(error_frame(Some(topic), INVALID_FRAME));
+        return Parsed::Reply(error_frame(Some(topic), INVALID_FRAME));
     }
     if !is_valid_topic(topic) {
-        return Some(error_frame(Some(topic), INVALID_TOPIC));
+        return Parsed::Reply(error_frame(Some(topic), INVALID_TOPIC));
     }
     match kind {
-        "subscribe" => Some(match subscriptions.subscribe(topic) {
+        "subscribe" => Parsed::Reply(match subscriptions.subscribe(topic) {
             Ok(()) => to_text(&ServerMessage::Subscribed { topic }),
             Err(_) => error_frame(Some(topic), SUBSCRIPTION_LIMIT),
         }),
         "unsubscribe" => {
             subscriptions.unsubscribe(topic);
-            Some(to_text(&ServerMessage::Unsubscribed { topic }))
+            Parsed::Reply(to_text(&ServerMessage::Unsubscribed { topic }))
         }
         _ => {
             let Some(data) = frame.data else {
-                return Some(error_frame(Some(topic), INVALID_FRAME));
+                return Parsed::Reply(error_frame(Some(topic), INVALID_FRAME));
             };
-            subscriptions.fanout(topic, || {
-                to_text(&ServerMessage::Message { topic, from, data })
-            });
-            None
+            let delay_ms = frame.delay_ms.unwrap_or(0);
+            if delay_ms > MAX_DELAY_MS {
+                return Parsed::Reply(error_frame(Some(topic), INVALID_DELAY));
+            }
+            Parsed::Publish {
+                topic: frame.topic,
+                data,
+                delay_ms,
+            }
         }
     }
 }

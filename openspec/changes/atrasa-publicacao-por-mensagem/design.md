@@ -39,12 +39,26 @@ Not from the previous frame's send. A frame that arrives after a long idle perio
 **Evidence from the spike** (`tests/gateway.rs`, spike worktree): a `Close` frame and an abrupt TCP drop during the wait both leave the subscriber with nothing; a text frame sent during the wait is processed after the delayed publish; a `Ping` during a 600 ms wait is answered in 0.37 ms because tungstenite answers it inside the read poll. `SplitStream::next` is cancel-safe: `futures-util-0.3.33/src/stream/stream/next.rs:32` is only `self.stream.poll_next_unpin(cx)`, and `split.rs:41` drops the lock guard inside the poll.
 
 **Limits, kept and documented.**
-- Only one frame is read ahead. A `Close` that arrives after a held frame is not seen until the wait ends, and the delayed publish is then delivered.
+- Only one frame is read ahead, and once it is held the socket is not read until the wait ends. A `Close`, end of stream or socket error that arrives after a held frame is seen only then: the connection keeps its slot and memory for the rest of the wait, and the delayed publish and the held frame are both delivered. Measured with 1 000 connections killed behind a held frame: all stayed registered until the 120 s wait ended.
 - A client cannot cancel a waiting publish. Only disconnecting does.
-- A held frame is discarded if the connection ends before it is processed.
+- A held frame is discarded only if the reader ends before processing it, which a disconnect behind it does not cause (previous bullet).
 - A peer that disappears without a FIN or RST is not noticed before TCP notices it. This is unchanged from today.
 
 **Cost of the lookahead.** About 18 lines (`wait_out`), one `Option<Message>`, one more frame (up to 64 KiB) per waiting connection. Performance is not yet established (`tasks.md` 4.2). If repeated measurements show the no-delay path regressed outside the run-to-run spread, the lookahead is reopened and this entry is amended with the numbers.
+
+**Measured (tasks.md 4.2).** `scripts/bench.sh --quick` (fanout-200, 49 750 msg/s), 5 runs per side, alternating main (`f0faf52`) and the branch, except that two runs that failed calibration (main run 2 and branch run 1) were redone afterwards, in that order. Every run in the table passed calibration, delivered 100% and raised 0 warnings. Service latency in ms, p50 / p99:
+
+| Run | main | branch |
+|---|---|---|
+| 1 | 1.532 / 5.424 | 2.088 / 6.192 |
+| 2 | 3.128 / 7.088 | 1.532 / 6.352 |
+| 3 | 2.584 / 7.408 | 2.920 / 8.928 |
+| 4 | 2.872 / 5.968 | 2.728 / 6.992 |
+| 5 | 2.936 / 6.864 | 2.264 / 6.448 |
+
+All 5 branch p50 values fall inside main's spread (1.532 to 3.128 ms). 4 of 5 branch p99 values fall inside main's spread (5.424 to 7.408 ms), and one (8.928 ms) is above it, so the rule in 4.2, as written, is not met. The medians are p50 2.872 ms on main and 2.264 ms on the branch, and p99 6.864 ms on main and 6.448 ms on the branch. An earlier series of 3 runs per side gave the same picture: one branch p99 (8.736 ms) above main's maximum (7.568 ms), with medians of p50 2.920 ms against 2.920 ms and p99 6.960 ms against 6.992 ms.
+
+**Decision, by the project owner: the lookahead is kept.** The no-delay path adds one comparison, the medians do not move against the branch, and removing the lookahead would break the requirement that a waiting publish dies with its connection. It is reopened if a later measurement shows the branch's median p99 above main's spread.
 
 ### 4. Text only in this version
 
