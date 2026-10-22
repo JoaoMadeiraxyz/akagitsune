@@ -8,7 +8,7 @@ What is done, and what is planned next, in the order it is planned. Every item s
 |---|---|---|---|
 | 1 | **Topic routing** | 2026-10-06 | A publish reaches only the subscribers of its topic. Implemented in [akagitsune#33](https://github.com/JoaoMadeiraxyz/akagitsune/pull/33), specs consolidated in [akagitsune#34](https://github.com/JoaoMadeiraxyz/akagitsune/pull/34). Decisions 12 to 15 in `docs/decisions.md`. |
 | 2 | **Connect-time authentication** | 2026-10-22 | A connection is admitted only with a configured token, sent as a bearer header or a subprotocol, never as an in-band frame. Implemented in [akagitsune#39](https://github.com/JoaoMadeiraxyz/akagitsune/pull/39), proposal [akagitsune#37](https://github.com/JoaoMadeiraxyz/akagitsune/pull/37), specs consolidated in [akagitsune#40](https://github.com/JoaoMadeiraxyz/akagitsune/pull/40). Decision 19 in `docs/decisions.md`. |
-| 3 | **Publish pacing** | 2026-10-22 | A text publish may carry `delay_ms` (up to 120 s); the connection's reader waits before fanning out, with no queue. Implemented in [akagitsune#41](https://github.com/JoaoMadeiraxyz/akagitsune/pull/41), proposal [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35), specs consolidated in a follow-up PR. Decision 17 in `docs/decisions.md`. |
+| 3 | **Publish pacing** | 2026-10-22 | A text publish may carry `delay_ms` (up to 120 s); the connection's reader waits before fanning out, with no queue. Implemented in [akagitsune#41](https://github.com/JoaoMadeiraxyz/akagitsune/pull/41), proposal [akagitsune#35](https://github.com/JoaoMadeiraxyz/akagitsune/pull/35), specs consolidated in [akagitsune#42](https://github.com/JoaoMadeiraxyz/akagitsune/pull/42). Decision 17 in `docs/decisions.md`. |
 
 ## Planned, in order
 
