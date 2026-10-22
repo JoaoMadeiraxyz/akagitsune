@@ -27,6 +27,16 @@ The socket is split, and each direction gets its own task:
 
 Only the writer touches the sink, so no locking is needed around it.
 
+The reader processes one frame at a time. A text `publish` with `delay_ms > 0`
+makes it wait before fanning out, and while it waits it selects between the timer
+and the next frame (`wait_out`). A protocol `Ping` or `Pong` is skipped, the first
+`Text` or `Binary` frame is held and the socket is not polled again until the
+timer fires, and a `Close`, end of stream or error seen before a frame is held
+drops the publish and ends the reader. A disconnect behind a held frame is seen
+only after the wait, once both frames are delivered. The held frame is processed
+right after the delayed publish. The envelope is still built once, after the
+wait, inside the fanout closure.
+
 `tokio::select!` waits for the first of the two to finish, then aborts the
 other. Any termination reason, such as client close or socket error, tears the
 whole connection down through one path.
@@ -125,6 +135,7 @@ A topic that must be protected goes on its own connection.
 | Control queue        | `CONTROL_QUEUE_CAPACITY = 16`                      | Replies are never dropped. A connection that floods control frames without reading stalls only its own reader.                                             |
 | Message size         | `MAX_MESSAGE_SIZE = 64 KiB`                        | Larger frames are rejected at the WebSocket layer and the connection is closed. A delivered binary frame is at most 16 bytes larger.                       |
 | Per-connection cost  | 2 tasks, 1 control channel, 1 inbox                | Task overhead dominates at high connection counts.                                                                                                         |
+| Delayed publish      | `MAX_DELAY_MS = 120 000`, one wait per connection  | The wait is served by the connection's reader, with no queue. The connection's other text frames wait behind it, at most two frames of up to 64 KiB are held, and TCP backpressure falls on the client. |
 | Process model        | Single process, no backplane                       | The ceiling is one machine. Two instances share nothing; clients on different instances cannot reach each other.                                           |
 
 ### What would have to change

@@ -124,6 +124,73 @@ The envelope exists so receivers know the topic and the origin, and so the
 gateway can signal errors and message loss on the same stream without colliding
 with the payload. A sender's frames reach a receiver in send order.
 
+### Delaying a publish
+
+A text `publish` can carry `delay_ms`, a whole number of milliseconds from 0 to
+120 000 (120 s):
+
+```json
+{"type": "publish", "topic": "t", "data": {"hp": 42}, "delay_ms": 5000}
+```
+
+The gateway waits that long before delivering the publish, counting from the
+moment it becomes the next frame the gateway processes for the connection. A
+publish without `delay_ms`, or with `0`, is delivered immediately. A connection's
+frames are processed in order, so for three frames sent back to back:
+
+```
+msg1 -> delay 5 s
+msg2 -> no delay
+msg3 -> delay 6 s
+```
+
+msg1 is delivered 5 s after it was sent, msg2 right after msg1, and msg3 6 s after
+msg2.
+
+A `delay_ms` from 120 001 up to 18 446 744 073 709 551 615 is answered with an
+`error` frame naming the topic, the publish is not delivered, and the connection
+stays open. Only a JSON integer literal is accepted. A `delay_ms` that is
+negative, fractional, written as `1e3`, `1.0` or `-0`, `null`, not a number, or an
+integer too large for 64 bits makes the whole frame an invalid frame, on any frame
+type. On `subscribe` and `unsubscribe`, a well-formed `delay_ms` is ignored, whatever
+its value, like any other unknown field.
+
+The delay is served by the connection's own reader, not by a queue, and that has
+consequences a client has to plan for:
+
+- **Text publishes only.** The binary header has no field for a delay, and
+  extending it is a second wire format. A client that wants paced binary frames
+  waits on its own side.
+- **The connection's other text frames wait.** While a publish waits, the
+  reader does not process a later subscribe, unsubscribe or publish, nor
+  application-level pings sent as text. They are processed, in order, after the
+  wait. The reader holds one text or binary frame and stops reading the socket, so
+  TCP backpressure slows a client that keeps writing, and the gateway never
+  holds more than two frames for the connection.
+- **Protocol pings are answered.** A `Ping` frame during the wait gets its `Pong`
+  at once.
+- **A waiting publish cannot be cancelled.** Only disconnecting drops it. There
+  is no cancel frame, because the reader is not processing frames while it waits.
+- **A waiting publish is lost if the connection drops before another frame is
+  held.** A `Close` frame, the end of the stream or a socket error during the
+  wait drops the publish. There is no persistence and no replay, and a new
+  connection starts with nothing. A peer that vanishes without a FIN or RST is
+  noticed only when TCP notices it, as without delays. An application that needs
+  durable scheduling runs a service beside the gateway that stores the publishes
+  and sends them at the due time.
+- **A disconnect behind a held frame is seen late.** Only one frame is read
+  ahead, and once it is held the socket is not read until the wait ends. A
+  `Close`, end of stream or socket error that arrives after a held frame is
+  therefore seen only when the wait ends: the connection keeps its slot and
+  memory until then, up to 120 s, and the delayed publish and the held frame are
+  both delivered before the reader notices the disconnect.
+- **The delay is a minimum.** Each wait overshoots the requested delay by about
+  1 ms (1.1 ms p50 in a load test), and chained delays accumulate it: about
+  0.2 s after 400 chained publishes.
+- **An older gateway ignores `delay_ms` silently.** It publishes immediately, and
+  the frames alone do not tell the client its pacing was not applied. Check the
+  gateway version.
+
 ### Binary frames
 
 The payload is opaque bytes. A client sends `[len: u8][topic: len bytes][payload]`
