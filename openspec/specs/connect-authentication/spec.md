@@ -24,7 +24,7 @@ Teste: `tests/gateway.rs:1034` — `connection_is_admitted_without_credentials_w
 ### Requirement: Admission requires a configured token when authentication is on
 When at least one token is configured, the gateway SHALL complete a WebSocket upgrade only if the request carries a token equal to a configured one, in `Authorization: Bearer <token>` or in the `Sec-WebSocket-Protocol` header as the offered protocols `bearer` and `<token>`. If both are present, only the `Authorization` header SHALL be considered. The comparison SHALL be constant-time for tokens of the same length.
 
-Fonte: `src/ws.rs:73` — `websocket_handler`; `src/auth.rs:53` — `Tokens::admits`.
+Fonte: `src/ws.rs:77` — `websocket_handler`; `src/auth.rs:53` — `Tokens::admits`.
 Teste: `tests/gateway.rs:1041` — `bearer_header_token_is_admitted`; `tests/gateway.rs:1050` — `subprotocol_token_is_admitted`; `tests/gateway.rs:1065` — `authorization_header_wins_over_subprotocol`.
 
 #### Scenario: Bearer header with a configured token is admitted
@@ -47,7 +47,7 @@ Teste: `tests/gateway.rs:1041` — `bearer_header_token_is_admitted`; `tests/gat
 ### Requirement: A request without a valid token is refused before the upgrade
 When authentication is on, a request with no credential, a malformed credential or a token that matches no configured token SHALL be answered with HTTP `401`, the header `WWW-Authenticate: Bearer` and an empty body, and SHALL NOT be upgraded. The response SHALL be identical for all three cases. No `welcome` frame SHALL be sent, no connection identity SHALL be allocated and the connection count SHALL NOT change. A token passed in the URL query string SHALL NOT be accepted.
 
-Fonte: `src/ws.rs:73` — `websocket_handler`.
+Fonte: `src/ws.rs:77` — `websocket_handler`.
 Teste: `tests/gateway.rs:1079` — `missing_credential_is_refused_with_401`; `tests/gateway.rs:1086` — `wrong_token_is_refused_with_401`; `tests/gateway.rs:1113` — `query_string_token_is_not_accepted`; `tests/gateway.rs:1120` — `refused_requests_do_not_count_as_connections`; `tests/gateway.rs:1145` — `each_refusal_logs_one_warn_with_the_peer_address`.
 
 #### Scenario: No credential is refused
@@ -74,7 +74,7 @@ Teste: `tests/gateway.rs:1079` — `missing_credential_is_refused_with_401`; `te
 ### Requirement: An admitted connection behaves as before
 After admission the gateway SHALL treat a connection identically whether authentication is on or off: the same `welcome` frame with a generated UUID, the same frames, the same limits and the same backpressure. The gateway SHALL NOT associate the token with the connection, SHALL NOT include it in any frame, and SHALL NOT write any token to a log. A token removed from the configuration SHALL NOT close connections that were already admitted.
 
-Fonte: `src/ws.rs:109` — `handle_socket`.
+Fonte: `src/ws.rs:113` — `handle_socket`.
 Teste: `tests/gateway.rs:1173` — `authenticated_connection_is_welcomed_with_an_id`; `tests/gateway.rs:1184` — `authenticated_connections_relay_to_each_other`.
 
 #### Scenario: Authenticated connection gets the same welcome
