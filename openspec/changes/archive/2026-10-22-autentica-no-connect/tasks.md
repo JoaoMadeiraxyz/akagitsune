@@ -27,11 +27,11 @@
 - [x] 4.2 `README.md`: document `GATEWAY_AUTH_TOKENS`, the two credential forms with a browser example for the subprotocol, the TLS caveat, and remove "no authentication" from *Not implemented yet*
 - [x] 4.3 `docs/architecture.md`: say authentication happens at admission and what stays out of it. Keep the note on subscription authorization, which already points at decision 18, and say it is not planned
 - [x] 4.4 `openspec/config.yaml`: the Boundaries paragraph and the config line stop saying there is no auth and list `GATEWAY_AUTH_TOKENS`
-- [ ] 4.5 `docs/roadmap.md`: mark milestone 2 as in progress with the PR link, and mark it done when merged
+- [x] 4.5 `docs/roadmap.md`: mark milestone 2 as in progress with the PR link, and mark it done when merged
 
 ## 5. Verification
 
 - [x] 5.1 The author runs `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` locally
-- [ ] 5.2 The author runs `scripts/bench.sh --quick` once and puts the numbers in the PR to show connection setup did not regress. `--goal` is not required, because `src/registry.rs` and the reader and writer in `src/ws.rs` are untouched
-- [ ] 5.3 The reviewer confirms the CI run on the PR is green before merging. CI runs fmt, clippy and test, but nothing blocks a merge on red
-- [ ] 5.4 The reviewer greps the diff and the test output for any token value, and checks the new code for comments
+- [x] 5.2 The author runs `scripts/bench.sh --quick` once and puts the numbers in the PR to show connection setup did not regress. `--goal` is not required, because `src/registry.rs` and the reader and writer in `src/ws.rs` are untouched
+- [x] 5.3 The reviewer confirms the CI run on the PR is green before merging. CI runs fmt, clippy and test, but nothing blocks a merge on red
+- [x] 5.4 The reviewer greps the diff and the test output for any token value, and checks the new code for comments
