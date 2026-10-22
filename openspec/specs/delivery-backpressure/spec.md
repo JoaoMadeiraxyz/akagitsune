@@ -8,8 +8,8 @@ Defines what happens when a connection cannot keep up with the frames relayed to
 ### Requirement: Lagging connections are warned of dropped frames
 Each connection SHALL hold at most 256 frames pending delivery. When a frame is to be delivered to a connection that already holds 256, the gateway SHALL discard that connection's oldest pending frame, for that connection only. When the connection is next served after one or more discards, the gateway SHALL send it `{"type":"warning","dropped":<n>}` before any further frame, where `n` is greater than zero and equal to the number of frames discarded for it since the previous frame it was sent, and SHALL then continue with the oldest frame still pending. Frames a connection published itself SHALL NOT be counted in `n`.
 
-Fonte: `src/registry.rs:12` — `Subscriber`; `src/ws.rs:27` — `INBOX_CAPACITY`; `src/ws.rs:116` — `write_loop`; `src/protocol.rs:14` — `ServerMessage`.
-Teste: `tests/gateway.rs:313` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:333` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:371` — `dropped_count_matches_the_frames_skipped`.
+Fonte: `src/registry.rs:12` — `Subscriber`; `src/ws.rs:32` — `INBOX_CAPACITY`; `src/ws.rs:176` — `write_loop`; `src/protocol.rs:15` — `ServerMessage`.
+Teste: `tests/gateway.rs:325` — `slow_consumer_receives_a_warning_frame`; `tests/gateway.rs:345` — `delivery_resumes_after_a_warning`; `tests/gateway.rs:383` — `dropped_count_matches_the_frames_skipped`.
 
 #### Scenario: Slow consumer receives a warning
 - **WHEN** connection B is subscribed to `k` and reads slower than frames arrive
@@ -34,7 +34,7 @@ Teste: `tests/gateway.rs:313` — `slow_consumer_receives_a_warning_frame`; `tes
 The gateway SHALL accept and deliver a publisher's frames regardless of how far behind any subscriber of the topic is. A slow subscriber SHALL only cause frames to be dropped for itself.
 
 Fonte: `src/registry.rs:63` — `fanout`; `src/registry.rs:18` — `TopicRegistry`.
-Teste: `tests/gateway.rs:418` — `slow_receiver_does_not_hold_back_others`.
+Teste: `tests/gateway.rs:430` — `slow_receiver_does_not_hold_back_others`.
 
 #### Scenario: Other connections keep receiving
 - **WHEN** connections B and C are subscribed to `k` and B stops reading
