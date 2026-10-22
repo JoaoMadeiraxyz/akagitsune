@@ -28,12 +28,46 @@ cargo run
 # gateway listening on ws://127.0.0.1:3000/ws
 ```
 
-| Variable       | Default                 | Description   |
-| -------------- | ----------------------- | ------------- |
-| `GATEWAY_ADDR` | `127.0.0.1:3000`        | Bind address  |
-| `RUST_LOG`     | `realtime_gateway=info` | Log filter    |
+| Variable              | Default                    | Description                     |
+| --------------------- | -------------------------- | ------------------------------- |
+| `GATEWAY_ADDR`        | `127.0.0.1:3000`           | Bind address                    |
+| `GATEWAY_AUTH_TOKENS` | unset (authentication off) | Comma-separated accepted tokens |
+| `RUST_LOG`            | `realtime_gateway=info`    | Log filter                      |
 
 `Ctrl-C` shuts down gracefully.
+
+### Authentication
+
+With `GATEWAY_AUTH_TOKENS` unset or empty, any client can connect, and the
+gateway logs `authentication is off: any client can connect` at startup.
+Exposing it beyond a trusted network in that state is the operator's decision.
+
+```bash
+GATEWAY_AUTH_TOKENS=token-a,token-b cargo run
+```
+
+Each token is 1 to 128 bytes of letters, digits and ``!#$%&'*+-.^_`|~``. An
+invalid entry stops startup with an error naming its position. A client
+presents a token in one of two places, and the header wins if both are sent:
+
+- `Authorization: Bearer <token>`
+- `Sec-WebSocket-Protocol: bearer, <token>`, for browsers, which cannot set
+  headers on a WebSocket. The gateway answers with `Sec-WebSocket-Protocol:
+  bearer` and never echoes the token.
+
+```js
+const socket = new WebSocket("ws://127.0.0.1:3000/ws", ["bearer", "token-a"]);
+```
+
+A missing, malformed or wrong token gets `401` with `WWW-Authenticate: Bearer`
+and an empty body, before any WebSocket exists. A token in the query string is
+not accepted, so a client that can set neither form cannot authenticate. The
+token is checked once, at connect: removing it from the configuration does not
+close connections already open. A token identifies a deployment, not a client,
+and does not limit which topics a connection can use.
+
+The gateway does not terminate TLS. A bearer token over plain `ws://` is
+readable on the wire, so put the gateway behind a proxy that serves `wss://`.
 
 ## Protocol
 
@@ -140,19 +174,20 @@ A connection holds at most 64 subscriptions.
 
 ## Layout
 
-| Path                  | Responsibility                      |
-| --------------------- | ----------------------------------- |
-| `src/protocol.rs`     | Frames the gateway emits            |
-| `src/registry.rs`     | Topic registry and subscriptions    |
-| `src/state.rs`        | Shared state                        |
-| `src/ws.rs`           | Connection lifecycle and tasks      |
-| `src/lib.rs`          | Router and `run`                    |
-| `src/main.rs`         | Config, logging and shutdown        |
-| `tests/gateway.rs`    | End-to-end integration tests        |
-| `examples/loadgen.rs` | Load generator                      |
-| `examples/refserver.rs`| Reference server for calibration   |
-| `scripts/bench.sh`    | Benchmark sweep                     |
-| `scripts/calibrate.sh`| Harness self-check                  |
+| Path                    | Responsibility                              |
+| ----------------------- | ------------------------------------------- |
+| `src/auth.rs`           | Token set and constant-time admission check |
+| `src/protocol.rs`       | Frames the gateway emits                    |
+| `src/registry.rs`       | Topic registry and subscriptions            |
+| `src/state.rs`          | Shared state                                |
+| `src/ws.rs`             | Connection lifecycle and tasks              |
+| `src/lib.rs`            | Router and `run`                            |
+| `src/main.rs`           | Config, logging and shutdown                |
+| `tests/gateway.rs`      | End-to-end integration tests                |
+| `examples/loadgen.rs`   | Load generator                              |
+| `examples/refserver.rs` | Reference server for calibration            |
+| `scripts/bench.sh`      | Benchmark sweep                             |
+| `scripts/calibrate.sh`  | Harness self-check                          |
 
 Each connection runs two tasks: one reading from the socket and one writing to
 it. The first to finish tears down the other. The sender serializes the envelope
@@ -191,5 +226,5 @@ baselines, and how to read them.
 
 ## Not implemented yet
 
-There is no authentication, no per-connection rate limiting, no access control
+There is no per-connection rate limiting, no access control
 on topics, and no backplane for running more than one instance.

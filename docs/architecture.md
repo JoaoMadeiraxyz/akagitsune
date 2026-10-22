@@ -129,8 +129,15 @@ A topic that must be protected goes on its own connection.
 
 ### What would have to change
 
-- **Subscription authorization** is deliberately absent (`docs/decisions.md`,
-  entry 18). Any connection that is admitted can read any topic it can guess.
+- **Authentication** happens once, at admission (`docs/decisions.md`, entry
+  19): `websocket_handler` checks `Authorization: Bearer` or the `bearer`
+  subprotocol against `GATEWAY_AUTH_TOKENS` before the upgrade and refuses with
+  `401`. It reads headers only. The token is not stored per connection and
+  never reaches `handle_socket`, so nothing after admission can see it, and
+  there is no revocation of live connections.
+- **Subscription authorization** is deliberately absent and not planned
+  (`docs/decisions.md`, entry 18). Any connection that is admitted can read any
+  topic it can guess.
   It would need a credential issued per connection, and `subscribe` is the
   single place where a check would go.
 - **Horizontal scale** needs a backplane (Redis pub/sub, NATS, a gossip mesh) so

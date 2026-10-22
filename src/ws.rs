@@ -1,12 +1,14 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::{
     extract::{
-        State,
+        ConnectInfo, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    response::Response,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use futures_util::{
     sink::SinkExt,
@@ -16,12 +18,12 @@ use tokio::sync::{
     broadcast::{self, error::RecvError, error::TryRecvError},
     mpsc,
 };
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::protocol::{BinaryHeader, ClientFrame, ServerMessage, is_valid_topic};
 use crate::registry::{Subscriber, Subscriptions};
-use crate::state::AppState;
+use crate::state::{AppState, SessionState};
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
 const INBOX_CAPACITY: usize = 256;
@@ -32,13 +34,67 @@ const INVALID_TOPIC: &str = "topics must be 1 to 255 bytes of UTF-8";
 const INVALID_BINARY: &str =
     "binary frames must start with a topic length and that many topic bytes";
 const SUBSCRIPTION_LIMIT: &str = "a connection can hold at most 64 subscriptions";
+const BEARER: &str = "bearer";
+
+fn bearer_from_header(headers: &HeaderMap) -> Option<&[u8]> {
+    let value = headers.get(header::AUTHORIZATION)?.as_bytes();
+    let scheme_len = BEARER.len() + 1;
+    let admitted_shape = value.len() > scheme_len
+        && value[..BEARER.len()].eq_ignore_ascii_case(BEARER.as_bytes())
+        && value[BEARER.len()] == b' ';
+    Some(if admitted_shape {
+        &value[scheme_len..]
+    } else {
+        &[]
+    })
+}
+
+fn admitted_by_subprotocol(state: &AppState, ws: &WebSocketUpgrade) -> bool {
+    let mut offered_bearer = false;
+    let mut offered_token = false;
+    for protocol in ws.requested_protocols() {
+        if protocol.as_bytes() == BEARER.as_bytes() {
+            offered_bearer = true;
+        } else {
+            offered_token |= state.tokens().admits(protocol.as_bytes());
+        }
+    }
+    offered_bearer && offered_token
+}
+
+fn refusal() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))],
+    )
+        .into_response()
+}
 
 pub async fn websocket_handler(
     State(state): State<Arc<AppState>>,
-    ws: WebSocketUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    mut ws: WebSocketUpgrade,
 ) -> Response {
+    if !state.tokens().is_empty() {
+        let admitted = match bearer_from_header(&headers) {
+            Some(token) => state.tokens().admits(token),
+            None => {
+                let admitted = admitted_by_subprotocol(&state, &ws);
+                if admitted {
+                    ws.set_selected_protocol(HeaderValue::from_static(BEARER));
+                }
+                admitted
+            }
+        };
+        if !admitted {
+            warn!("{peer} refused: missing or invalid credential");
+            return refusal();
+        }
+    }
+    let session = state.session();
     ws.max_message_size(MAX_MESSAGE_SIZE)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, session))
 }
 
 fn to_text(msg: &ServerMessage<'_>) -> Message {
@@ -50,7 +106,7 @@ fn error_frame(topic: Option<&str>, message: &str) -> Message {
     to_text(&ServerMessage::Error { topic, message })
 }
 
-async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
+async fn handle_socket(mut socket: WebSocket, state: Arc<SessionState>) {
     let my_id = Uuid::new_v4();
 
     if socket

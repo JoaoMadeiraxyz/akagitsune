@@ -6,15 +6,27 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message as WsMessage,
+    MaybeTlsStream, WebSocketStream, connect_async,
+    tungstenite::{
+        Error as WsError, Message as WsMessage, client::IntoClientRequest, http::Response,
+    },
 };
 
 type Client = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn spawn_server() -> String {
+    spawn_server_with_tokens("").await
+}
+
+async fn spawn_server_with_tokens(tokens: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(realtime_gateway::run(listener, std::future::pending()));
+    let tokens = realtime_gateway::auth::parse_tokens(tokens).unwrap();
+    tokio::spawn(realtime_gateway::run(
+        listener,
+        tokens,
+        std::future::pending(),
+    ));
     format!("ws://{addr}/ws")
 }
 
@@ -911,4 +923,416 @@ async fn membership_churn_does_not_disturb_a_steady_receiver() {
     publish(&mut publisher, "hot", r#""after""#).await;
     assert_eq!(next_json(&mut late).await["data"], json!("after"));
     assert_eq!(next_json(&mut steady).await["data"], json!("after"));
+}
+
+type Refusal = Response<Option<Vec<u8>>>;
+
+async fn connect_with(url: &str, headers: &[(&str, &str)]) -> Result<(Client, Refusal), WsError> {
+    let mut request = url.into_client_request().unwrap();
+    for (name, value) in headers {
+        request.headers_mut().append(
+            tokio_tungstenite::tungstenite::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            value.parse().unwrap(),
+        );
+    }
+    connect_async(request).await
+}
+
+async fn refused_with(url: &str, headers: &[(&str, &str)]) -> Refusal {
+    match connect_with(url, headers).await {
+        Err(WsError::Http(response)) => *response,
+        Err(other) => panic!("expected an HTTP refusal, got {other:?}"),
+        Ok(_) => panic!("expected a refusal, the upgrade succeeded"),
+    }
+}
+
+type Comparable = (u16, Vec<(String, Vec<u8>)>, Vec<u8>);
+
+fn comparable(response: &Refusal) -> Comparable {
+    let mut headers: Vec<(String, Vec<u8>)> = response
+        .headers()
+        .iter()
+        .filter(|(name, _)| name.as_str() != "date")
+        .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+        .collect();
+    headers.sort();
+    (
+        response.status().as_u16(),
+        headers,
+        response.body().clone().unwrap_or_default(),
+    )
+}
+
+fn assert_plain_401(response: &Refusal) {
+    assert_eq!(response.status().as_u16(), 401);
+    assert_eq!(response.headers()["www-authenticate"], "Bearer");
+    assert!(
+        response.body().as_deref().unwrap_or_default().is_empty(),
+        "refusal body must be empty"
+    );
+}
+
+async fn welcomed(client: &mut Client) -> String {
+    let welcome = next_json(client).await;
+    assert_eq!(welcome["type"], "welcome");
+    welcome["id"].as_str().unwrap().to_string()
+}
+
+#[derive(Clone, Default)]
+struct LogCapture(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogCapture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+    type Writer = LogCapture;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn global_logs() -> &'static LogCapture {
+    static LOGS: std::sync::OnceLock<LogCapture> = std::sync::OnceLock::new();
+    LOGS.get_or_init(|| {
+        let logs = LogCapture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(logs.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+        logs
+    })
+}
+
+impl LogCapture {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+async fn eventually_logged(logs: &LogCapture, needle: &str) {
+    for _ in 0..100 {
+        if logs.text().contains(needle) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("log never contained {needle:?}:\n{}", logs.text());
+}
+
+#[tokio::test]
+async fn connection_is_admitted_without_credentials_when_auth_is_off() {
+    let url = spawn_server_with_tokens("").await;
+    let (mut client, _) = connect_async(&url).await.unwrap();
+    welcomed(&mut client).await;
+}
+
+#[tokio::test]
+async fn bearer_header_token_is_admitted() {
+    let url = spawn_server_with_tokens("t1,t2").await;
+    let (mut client, _) = connect_with(&url, &[("authorization", "Bearer t2")])
+        .await
+        .unwrap();
+    welcomed(&mut client).await;
+}
+
+#[tokio::test]
+async fn subprotocol_token_is_admitted() {
+    let url = spawn_server_with_tokens("t1").await;
+    let (mut client, response) = connect_with(&url, &[("sec-websocket-protocol", "bearer, t1")])
+        .await
+        .unwrap();
+    let selected: Vec<_> = response
+        .headers()
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .collect();
+    assert_eq!(selected, ["bearer"]);
+    welcomed(&mut client).await;
+}
+
+#[tokio::test]
+async fn authorization_header_wins_over_subprotocol() {
+    let url = spawn_server_with_tokens("t1").await;
+    let response = refused_with(
+        &url,
+        &[
+            ("authorization", "Bearer wrong"),
+            ("sec-websocket-protocol", "bearer, t1"),
+        ],
+    )
+    .await;
+    assert_plain_401(&response);
+}
+
+#[tokio::test]
+async fn missing_credential_is_refused_with_401() {
+    let url = spawn_server_with_tokens("t1").await;
+    let response = refused_with(&url, &[]).await;
+    assert_plain_401(&response);
+}
+
+#[tokio::test]
+async fn wrong_token_is_refused_with_401() {
+    let url = spawn_server_with_tokens("t1,xt1").await;
+    let missing = refused_with(&url, &[]).await;
+    assert_plain_401(&missing);
+
+    let wrong_cases: [&[(&str, &str)]; 9] = [
+        &[("authorization", "Bearer t3")],
+        &[("authorization", "Basic t1")],
+        &[("authorization", "Bearerxt1")],
+        &[
+            ("authorization", "Basic x"),
+            ("sec-websocket-protocol", "bearer, t1"),
+        ],
+        &[("authorization", "Basic xyz")],
+        &[("authorization", "Bearer")],
+        &[("authorization", "Bearer ")],
+        &[("sec-websocket-protocol", "bearer, t3")],
+        &[("sec-websocket-protocol", "t1")],
+    ];
+    for headers in wrong_cases {
+        let response = refused_with(&url, headers).await;
+        assert_plain_401(&response);
+        assert_eq!(comparable(&response), comparable(&missing), "{headers:?}");
+    }
+}
+
+#[tokio::test]
+async fn query_string_token_is_not_accepted() {
+    let url = spawn_server_with_tokens("t1").await;
+    let response = refused_with(&format!("{url}?token=t1"), &[]).await;
+    assert_plain_401(&response);
+}
+
+#[tokio::test]
+async fn refused_requests_do_not_count_as_connections() {
+    let logs = global_logs();
+
+    let url = spawn_server_with_tokens("t1").await;
+    for _ in 0..3 {
+        refused_with(&url, &[("authorization", "Bearer secret-guess")]).await;
+    }
+    refused_with(&url, &[("sec-websocket-protocol", "bearer, secret-guess2")]).await;
+    let (mut first, _) = connect_with(&url, &[("authorization", "Bearer t1")])
+        .await
+        .unwrap();
+    let first_id = welcomed(&mut first).await;
+    eventually_logged(logs, &format!("{first_id} connected (total: 1)")).await;
+    let (mut second, _) = connect_with(&url, &[("authorization", "Bearer t1")])
+        .await
+        .unwrap();
+    let second_id = welcomed(&mut second).await;
+    eventually_logged(logs, &format!("{second_id} connected (total: 2)")).await;
+
+    let text = logs.text();
+    assert!(!text.contains("secret-guess"), "{text}");
+    assert!(!text.contains("secret-guess2"), "{text}");
+}
+
+#[tokio::test]
+async fn each_refusal_logs_one_warn_with_the_peer_address() {
+    let logs = global_logs();
+    let url = spawn_server_with_tokens("t1").await;
+    let host = url.trim_start_matches("ws://").trim_end_matches("/ws");
+
+    let mut peers = Vec::new();
+    for guess in ["peer-guess-a", "peer-guess-b"] {
+        let stream = tokio::net::TcpStream::connect(host).await.unwrap();
+        peers.push(stream.local_addr().unwrap());
+        let mut request = url.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", format!("Bearer {guess}").parse().unwrap());
+        let refusal = tokio_tungstenite::client_async(request, stream).await;
+        assert!(matches!(refusal, Err(WsError::Http(_))));
+    }
+
+    for peer in peers {
+        let needle = format!("{peer} refused");
+        eventually_logged(logs, &needle).await;
+        let text = logs.text();
+        let lines: Vec<_> = text.lines().filter(|l| l.contains(&needle)).collect();
+        assert_eq!(lines.len(), 1, "{text}");
+        assert!(!lines[0].contains("peer-guess"), "{}", lines[0]);
+    }
+}
+
+#[tokio::test]
+async fn authenticated_connection_is_welcomed_with_an_id() {
+    let url = spawn_server_with_tokens("t1").await;
+    let (mut client, _) = connect_with(&url, &[("authorization", "Bearer t1")])
+        .await
+        .unwrap();
+    let id = welcomed(&mut client).await;
+    assert!(uuid::Uuid::parse_str(&id).is_ok(), "not a uuid: {id}");
+    assert!(!id.contains("t1"));
+}
+
+#[tokio::test]
+async fn authenticated_connections_relay_to_each_other() {
+    let url = spawn_server_with_tokens("t1,t2").await;
+    let (mut a, _) = connect_with(&url, &[("authorization", "Bearer t1")])
+        .await
+        .unwrap();
+    let a_id = welcomed(&mut a).await;
+    let (mut b, _) = connect_with(&url, &[("sec-websocket-protocol", "bearer, t2")])
+        .await
+        .unwrap();
+    welcomed(&mut b).await;
+    subscribe(&mut b, "k").await;
+    subscribe(&mut a, "k").await;
+
+    publish(&mut a, "k", r#"{"n":1}"#).await;
+
+    assert_eq!(
+        next_json(&mut b).await,
+        message_json("k", &a_id, json!({"n": 1}))
+    );
+}
+
+#[tokio::test]
+async fn credentials_are_never_an_in_band_frame() {
+    let url = spawn_server_with_tokens("t1").await;
+    let (mut client, _) = connect_with(&url, &[("authorization", "Bearer t1")])
+        .await
+        .unwrap();
+    welcomed(&mut client).await;
+
+    send(
+        &mut client,
+        WsMessage::text(r#"{"type":"auth","token":"t1"}"#),
+    )
+    .await;
+    next_error(&mut client).await;
+
+    send(&mut client, WsMessage::text("t1")).await;
+    next_error(&mut client).await;
+}
+
+struct Gateway {
+    child: std::process::Child,
+    output: std::sync::mpsc::Receiver<String>,
+}
+
+impl Drop for Gateway {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn start_gateway(tokens: &std::ffi::OsStr) -> Gateway {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_realtime-gateway"))
+        .env("GATEWAY_ADDR", "127.0.0.1:0")
+        .env("GATEWAY_AUTH_TOKENS", tokens)
+        .env("RUST_LOG", "realtime_gateway=info")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (sender, output) = std::sync::mpsc::channel();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let from_stdout = sender.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = from_stdout.send(line);
+        }
+    });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
+        }
+    });
+    Gateway { child, output }
+}
+
+impl Gateway {
+    fn wait_for_exit(&mut self) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(std::time::Instant::now() < deadline, "gateway did not exit");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn drain_output(&self) -> String {
+        let mut text = String::new();
+        while let Ok(line) = self.output.recv_timeout(Duration::from_millis(500)) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text
+    }
+
+    fn wait_for_line(&self, needle: &str) -> String {
+        let mut seen = String::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if let Ok(line) = self.output.recv_timeout(Duration::from_millis(100)) {
+                seen.push_str(&line);
+                seen.push('\n');
+                if line.contains(needle) {
+                    return seen;
+                }
+            }
+        }
+        panic!("output never contained {needle:?}:\n{seen}");
+    }
+}
+
+#[test]
+fn invalid_token_entry_stops_startup_naming_only_its_position() {
+    let mut gateway = start_gateway("ok,a b".as_ref());
+    let status = gateway.wait_for_exit();
+    let output = gateway.drain_output();
+    assert_eq!(status.code(), Some(1), "{output}");
+    assert!(output.contains("position 2"), "{output}");
+    assert!(!output.contains("a b"), "{output}");
+    assert!(!output.contains("authentication is off"), "{output}");
+}
+
+#[test]
+fn empty_token_configuration_logs_that_authentication_is_off() {
+    let gateway = start_gateway("".as_ref());
+    gateway.wait_for_line("authentication is off: any client can connect");
+}
+
+#[test]
+fn configured_tokens_do_not_log_that_authentication_is_off() {
+    let gateway = start_gateway("t1".as_ref());
+    let seen = gateway.wait_for_line("gateway listening on");
+    assert!(!seen.contains("authentication is off"), "{seen}");
+    assert!(!seen.contains("t1"), "{seen}");
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_token_configuration_stops_startup() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut gateway = start_gateway(std::ffi::OsStr::from_bytes(b"\xff"));
+    let status = gateway.wait_for_exit();
+    let output = gateway.drain_output();
+    assert_eq!(status.code(), Some(1), "{output}");
+    assert!(!output.contains("authentication is off"), "{output}");
 }

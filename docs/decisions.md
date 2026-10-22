@@ -255,3 +255,11 @@ rather than quietly presented as the gateway's ceiling.
 **Decision.** There is no per-topic permission. Admission control at connect time is the only access check. The milestone is removed from the plan and kept under consideration with one trigger: an untrusted client, such as a browser, connecting directly to the gateway.
 
 **Consequence.** Any admitted connection can read and publish on any topic key it can guess, so keys are not secrets, and one trusted service can read another's topics. A deployment that needs separation gives each group of services its own gateway instance. If the trigger happens, the work is a credential issued per connection, not a per-token list in the configuration, and it needs its own proposal and entry.
+
+## 19. Connect-time authentication uses a configured set of opaque tokens
+
+**Context.** Any client that can reach `/ws` could connect, subscribe to any topic and publish on it. Entry 4 fixed where authentication goes (connect time, not an in-band frame) but not what is verified. A signed token would put claims in front of the gateway, and an external verifier would put I/O on the admission path.
+
+**Decision.** `GATEWAY_AUTH_TOKENS` is a comma-separated set of opaque tokens. When set, an upgrade is admitted only if `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: bearer, <token>` carries one of them, compared in constant time. Anything else is refused with `401` before the upgrade. When unset, authentication is off and the gateway logs a warning at startup. A token does not map to an identity: identity stays the connection UUID.
+
+**Consequence.** Admission is checked once, costs nothing after it, and adds no per-connection state. A token removed from the configuration does not close live connections. A browser can authenticate through the subprotocol, and no credential travels in a URL. There is no per-topic permission, by entry 18, so an admitted connection can use any topic.
