@@ -6,6 +6,7 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 pub const MAX_TOPIC_LEN: usize = 255;
+pub const MAX_DELAY_MS: u64 = 120_000;
 
 const UUID_LEN: usize = 16;
 
@@ -43,13 +44,16 @@ pub struct ClientFrame<'a> {
     pub topic: Cow<'a, str>,
     #[serde(borrow, default, deserialize_with = "present")]
     pub data: Option<&'a RawValue>,
+    #[serde(default, deserialize_with = "present")]
+    pub delay_ms: Option<u64>,
 }
 
-fn present<'de, D>(deserializer: D) -> Result<Option<&'de RawValue>, D::Error>
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    <&RawValue>::deserialize(deserializer).map(Some)
+    T::deserialize(deserializer).map(Some)
 }
 
 pub fn is_valid_topic(topic: &str) -> bool {
@@ -150,6 +154,26 @@ mod tests {
     #[test]
     fn extra_fields_are_ignored() {
         assert!(parse(r#"{"type":"subscribe","topic":"k","extra":[1]}"#).is_ok());
+    }
+
+    #[test]
+    fn delay_is_read_as_a_number() {
+        let frame = parse(r#"{"type":"publish","topic":"k","data":1,"delay_ms":250}"#).unwrap();
+        assert_eq!(frame.delay_ms, Some(250));
+    }
+
+    #[test]
+    fn absent_delay_is_none() {
+        let frame = parse(r#"{"type":"publish","topic":"k","data":1}"#).unwrap();
+        assert_eq!(frame.delay_ms, None);
+    }
+
+    #[test]
+    fn delay_that_is_not_a_non_negative_integer_is_rejected() {
+        for delay in ["-1", r#""5""#, "1.5", "null"] {
+            let text = format!(r#"{{"type":"publish","topic":"k","data":1,"delay_ms":{delay}}}"#);
+            assert!(parse(&text).is_err(), "accepted delay_ms {delay}");
+        }
     }
 
     #[test]

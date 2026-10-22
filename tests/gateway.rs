@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -506,6 +506,317 @@ async fn unrecognized_frame_is_rejected() {
 
     publish(&mut a, "k", "1").await;
     assert_eq!(next_json(&mut b).await["data"], json!(1));
+}
+
+fn delayed_publish_text(topic: &str, data: &str, delay: &str) -> String {
+    format!(
+        r#"{{"type":"publish","topic":{},"data":{data},"delay_ms":{delay}}}"#,
+        json!(topic)
+    )
+}
+
+#[tokio::test]
+async fn delayed_publish_example_timeline() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "300")),
+    )
+    .await;
+    publish(&mut a, "k", "2").await;
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "3", "400")),
+    )
+    .await;
+
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    let first = start.elapsed();
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+    let second = start.elapsed();
+    assert_eq!(next_json(&mut b).await["data"], json!(3));
+    let third = start.elapsed();
+
+    assert!(first >= Duration::from_millis(300), "first after {first:?}");
+    assert!(
+        second - first < Duration::from_millis(300),
+        "second {:?} after the first",
+        second - first
+    );
+    assert!(
+        third - second >= Duration::from_millis(350),
+        "third {:?} after the second",
+        third - second
+    );
+}
+
+#[tokio::test]
+async fn publish_without_delay_is_not_delayed() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    publish(&mut a, "k", "1").await;
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    send(&mut a, WsMessage::text(delayed_publish_text("k", "2", "0"))).await;
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+    assert!(start.elapsed() < Duration::from_millis(250));
+}
+
+#[tokio::test]
+async fn frame_sent_during_delay_is_processed_after_it() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "400")),
+    )
+    .await;
+    publish(&mut a, "k", "2").await;
+
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    assert!(start.elapsed() >= Duration::from_millis(400));
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+}
+
+#[tokio::test]
+async fn close_during_delay_drops_the_publish() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    let (mut c, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "500")),
+    )
+    .await;
+    send(&mut a, WsMessage::Close(None)).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    publish(&mut c, "k", "2").await;
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+    assert_silent(&mut b).await;
+}
+
+#[tokio::test]
+async fn tcp_drop_during_delay_drops_the_publish() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    let (mut c, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "500")),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    drop(a);
+    tokio::time::sleep(Duration::from_millis(800)).await;
+
+    publish(&mut c, "k", "2").await;
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+    assert_silent(&mut b).await;
+}
+
+#[tokio::test]
+async fn delay_above_cap_is_rejected() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "120001")),
+    )
+    .await;
+    assert_eq!(next_error(&mut a).await["topic"], "k");
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_silent(&mut b).await;
+
+    publish(&mut a, "k", "2").await;
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+}
+
+#[tokio::test]
+async fn non_integer_delay_is_an_invalid_frame() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    for delay in ["-1", r#""5""#, "1.5", "null"] {
+        send(
+            &mut a,
+            WsMessage::text(delayed_publish_text("k", "1", delay)),
+        )
+        .await;
+        assert_eq!(next_error(&mut a).await["topic"], Value::Null, "{delay}");
+    }
+    assert_silent(&mut b).await;
+
+    publish(&mut a, "k", "2").await;
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+}
+
+#[tokio::test]
+async fn delay_on_subscribe_is_ignored() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(r#"{"type":"subscribe","topic":"k","delay_ms":2000}"#),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut a).await,
+        json!({"type": "subscribed", "topic": "k"})
+    );
+    send(
+        &mut a,
+        WsMessage::text(r#"{"type":"unsubscribe","topic":"k","delay_ms":200000}"#),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut a).await,
+        json!({"type": "unsubscribed", "topic": "k"})
+    );
+    assert!(start.elapsed() < Duration::from_millis(1500));
+}
+
+#[tokio::test]
+async fn ping_during_delay_is_answered() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "600")),
+    )
+    .await;
+    send(&mut a, WsMessage::Ping(vec![7].into())).await;
+
+    assert!(matches!(next_msg(&mut a).await, WsMessage::Pong(_)));
+    assert!(start.elapsed() < Duration::from_millis(600));
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    assert!(start.elapsed() >= Duration::from_millis(600));
+}
+
+#[tokio::test]
+async fn delay_at_cap_is_accepted() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "120000")),
+    )
+    .await;
+    send(&mut a, WsMessage::Ping(vec![7].into())).await;
+    assert!(matches!(next_msg(&mut a).await, WsMessage::Pong(_)));
+
+    send(&mut a, WsMessage::Close(None)).await;
+    assert_silent(&mut b).await;
+}
+
+#[tokio::test]
+async fn binary_frame_sent_during_delay_is_processed_after_it() {
+    let url = spawn_server().await;
+    let (mut a, a_id) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "400")),
+    )
+    .await;
+    send(&mut a, WsMessage::binary(binary_frame("k", &[0x00, 0xff]))).await;
+
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    assert!(start.elapsed() >= Duration::from_millis(400));
+    let mut expected = vec![0x01, b'k'];
+    expected.extend_from_slice(uuid::Uuid::parse_str(&a_id).unwrap().as_bytes());
+    expected.extend_from_slice(&[0x00, 0xff]);
+    assert_eq!(next_msg(&mut b).await, WsMessage::binary(expected));
+}
+
+#[tokio::test]
+async fn malformed_delay_on_subscribe_is_an_invalid_frame() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut c, _) = connect(&url).await;
+
+    send(
+        &mut a,
+        WsMessage::text(r#"{"type":"subscribe","topic":"k","delay_ms":-1}"#),
+    )
+    .await;
+    assert_eq!(next_error(&mut a).await["topic"], Value::Null);
+
+    publish(&mut c, "k", "1").await;
+    assert_silent(&mut a).await;
+}
+
+#[tokio::test]
+async fn close_behind_held_frame_is_seen_after_the_wait() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+    let (mut b, _) = connect(&url).await;
+    subscribe(&mut b, "k").await;
+
+    let start = Instant::now();
+    send(
+        &mut a,
+        WsMessage::text(delayed_publish_text("k", "1", "400")),
+    )
+    .await;
+    publish(&mut a, "k", "2").await;
+    send(&mut a, WsMessage::Close(None)).await;
+
+    assert_eq!(next_json(&mut b).await["data"], json!(1));
+    assert!(start.elapsed() >= Duration::from_millis(400));
+    assert_eq!(next_json(&mut b).await["data"], json!(2));
+}
+
+#[tokio::test]
+async fn unknown_fields_are_still_ignored() {
+    let url = spawn_server().await;
+    let (mut a, _) = connect(&url).await;
+
+    send(
+        &mut a,
+        WsMessage::text(r#"{"type":"subscribe","topic":"k","extra":[1]}"#),
+    )
+    .await;
+    assert_eq!(
+        next_json(&mut a).await,
+        json!({"type": "subscribed", "topic": "k"})
+    );
 }
 
 #[tokio::test]
